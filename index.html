@@ -37,6 +37,14 @@ body{display:flex;flex-direction:column}
   transition:border-color .15s}
 .btn-link:hover{border-color:var(--accent);color:var(--accent)}
 
+/* ── Mode toggle ── */
+.mode-group{display:flex;border:1px solid var(--border);border-radius:5px;overflow:hidden;flex-shrink:0}
+.mode-btn{background:var(--bg);border:none;color:var(--muted);font-size:11px;font-weight:600;
+  padding:4px 10px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.mode-btn+.mode-btn{border-left:1px solid var(--border)}
+.mode-btn.active{background:var(--accent);color:#000}
+.mode-btn:hover:not(.active){color:var(--accent)}
+
 /* ── Map ── */
 #map{position:absolute;inset:0;cursor:crosshair;background:#111}
 
@@ -93,7 +101,7 @@ body{display:flex;flex-direction:column}
 <!-- Loading overlay -->
 <div id="load-overlay">
   <div class="load-call">KD9WXY</div>
-  <div class="load-title">Loading Great Lakes ducting data&hellip;</div>
+  <div class="load-title" id="load-title">Loading Great Lakes ducting data&hellip;</div>
   <div class="load-bar-wrap"><div id="load-bar"></div></div>
   <div id="load-status">Initializing&hellip;</div>
 </div>
@@ -103,9 +111,13 @@ body{display:flex;flex-direction:column}
   <div class="callsign">KD9WXY<small>Ham · 5G Engineer</small></div>
   <div>
     <div class="htitle">Great Lakes Ducting Loop</div>
-    <div class="hsub">7-Day GFS Forecast &nbsp;·&nbsp; n41 (2593 MHz) &nbsp;·&nbsp; Click map for site analysis</div>
+    <div class="hsub" id="mode-subtitle">7-Day GFS Forecast &nbsp;·&nbsp; n41 (2593 MHz) &nbsp;·&nbsp; Click map for site analysis</div>
   </div>
   <div class="spacer"></div>
+  <div class="mode-group">
+    <button class="mode-btn active" id="btn-mode-gfs">GFS Forecast</button>
+    <button class="mode-btn" id="btn-mode-era5">ERA5 Historical</button>
+  </div>
   <div class="legend-wrap">
     <div class="legend-bar"></div>
     <div class="legend-labels"><span>None</span><span>Low</span><span>Moderate</span><span>High</span><span>Severe</span></div>
@@ -231,12 +243,14 @@ function interferenceRisk(ducts,profile){
 // ══════════════════════════════════════════════════════
 // DATA CLIENT
 // ══════════════════════════════════════════════════════
-const OM_FCST = 'https://api.open-meteo.com/v1/forecast';
-const PLEVELS = [1000,975,950,925,900,850,800,750,700,600,500,400,300];
+const OM_FCST  = 'https://api.open-meteo.com/v1/forecast';
+const OM_ERA5  = 'https://archive-api.open-meteo.com/v1/era5';
+const PLEVELS  = [1000,975,950,925,900,850,800,750,700,600,500,400,300];
 
 function _omVars(){
   const plev=PLEVELS.flatMap(lv=>[`temperature_${lv}hPa`,`dewpoint_${lv}hPa`,`geopotential_height_${lv}hPa`]).join(',');
-  return plev+',temperature_2m,dewpoint_2m,surface_pressure';
+  // temperature_80m + relativehumidity_80m fill the critical near-surface gap (2m → 1000 hPa)
+  return plev+',temperature_2m,dewpoint_2m,surface_pressure,windspeed_10m,temperature_80m,relativehumidity_80m';
 }
 
 async function fetchRawOM(lat,lon){
@@ -244,6 +258,27 @@ async function fetchRawOM(lat,lon){
     +`&hourly=${_omVars()}&models=gfs_seamless&forecast_days=7&timezone=UTC`;
   const r=await fetch(url);
   if(!r.ok)throw new Error(`OM ${r.status}`);
+  const json=await r.json();
+  return{hourly:json.hourly,elevation:json.elevation??0};
+}
+
+// ERA5 has ~5-day publication lag; returns past 7 days ending 5 days ago
+function era5Dates(){
+  const end=new Date();end.setUTCHours(0,0,0,0);
+  end.setUTCDate(end.getUTCDate()-5);
+  const start=new Date(end);start.setUTCDate(start.getUTCDate()-6);
+  return{
+    start:start.toISOString().split('T')[0],
+    end:end.toISOString().split('T')[0],
+    startMs:start.getTime()
+  };
+}
+
+async function fetchRawERA5(lat,lon,startDate,endDate){
+  const url=`${OM_ERA5}?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+    +`&hourly=${_omVars()}&start_date=${startDate}&end_date=${endDate}&timezone=UTC`;
+  const r=await fetch(url);
+  if(!r.ok)throw new Error(`ERA5 ${r.status}`);
   const json=await r.json();
   return{hourly:json.hourly,elevation:json.elevation??0};
 }
@@ -257,12 +292,29 @@ function extractLevels(hourly,h,elev_m){
     if(T<-90||T>60)return null;
     return{pressure_hPa:lv,height_m:H,temp_C:T,dewpoint_C:(Td<-90?T-25:Td)};
   }).filter(Boolean);
+
   const T2=hourly['temperature_2m']?.[h];
   const Td2=hourly['dewpoint_2m']?.[h];
   const Ps=hourly['surface_pressure']?.[h];
+  const T80=hourly['temperature_80m']?.[h];
+  const RH80=hourly['relativehumidity_80m']?.[h];
+
   if(T2!=null&&Td2!=null&&Ps!=null&&T2>-90&&T2<60){
-    const surf={pressure_hPa:Ps,height_m:(elev_m??0)+2,temp_C:T2,dewpoint_C:(Td2<-90?T2-25:Td2)};
-    return[surf,...levels.filter(l=>l.height_m>surf.height_m+5)];
+    const hSurf=(elev_m??0)+2;
+    const surf={pressure_hPa:Ps,height_m:hSurf,temp_C:T2,dewpoint_C:(Td2<-90?T2-25:Td2)};
+
+    // Insert 80m boundary layer level when available — resolves the critical near-surface gap
+    if(T80!=null&&T80>-90&&T80<60&&RH80!=null&&RH80>=0&&RH80<=105){
+      const h80=(elev_m??0)+80;
+      // Magnus dewpoint approximation from RH
+      const Td80=T80-(100-Math.min(100,RH80))/5;
+      // Hypsometric pressure estimate: P(z) = Ps * exp(-z / (Rd/g * Tmean))
+      const P80=Ps*Math.exp(-80/(29.3*((T2+T80)/2+273.15)));
+      const lv80={pressure_hPa:+P80.toFixed(1),height_m:h80,temp_C:T80,dewpoint_C:+Td80.toFixed(1)};
+      return[surf,lv80,...levels.filter(l=>l.height_m>h80+5)];
+    }
+
+    return[surf,...levels.filter(l=>l.height_m>hSurf+5)];
   }
   return levels;
 }
@@ -278,14 +330,14 @@ function scorePoint(hourly,h,elevation){
 
 
 // ══════════════════════════════════════════════════════
-// GREAT LAKES GRID  (1° × 1°, 210 points, 40-49°N, 74-94°W)
+// GREAT LAKES GRID  (0.5° × 0.5°, 779 points, 40-49°N, 74-94°W)
 // ══════════════════════════════════════════════════════
-const GL_LATS = Array.from({length:10},(_,i)=>40+i);            // 40..49
-const GL_LONS = Array.from({length:21},(_,i)=>-94+i);           // -94..-74
+const GL_LATS = Array.from({length:19},(_,i)=>40+i*0.5);   // 40..49 at 0.5°
+const GL_LONS = Array.from({length:41},(_,i)=>-94+i*0.5);  // -94..-74 at 0.5°
 const GL_PTS  = GL_LATS.flatMap(lat=>GL_LONS.map(lon=>[lat,lon]));
 
-// Animation: every 6 h for 7 days = 28 frames (indices 0-167 valid in forecast_days=7)
-const ANIM_HOURS = Array.from({length:28},(_,i)=>i*6);          // 0,6,12,...,162
+// Animation: every 6 h for 7 days = 28 frames
+const ANIM_HOURS = Array.from({length:28},(_,i)=>i*6);     // 0,6,12,...,162
 
 // frames[i] = {h, label, offset, points:[[lat,lon,norm],...]}
 let frames = [];
@@ -293,8 +345,9 @@ let currentFrame = 0;
 let playing = false;
 let animTimer = null;
 let frameMs = 500;
+let currentMode = 'gfs';  // 'gfs' | 'era5'
 
-function glCacheKey(){return`kd9wxy_gl_v2_${new Date().toISOString().split('T')[0]}`}
+function glCacheKey(){return`kd9wxy_gl_v3_${currentMode}_${new Date().toISOString().split('T')[0]}`}
 const GL_TTL = 30*60*1000;
 
 function loadGLCache(){
@@ -305,21 +358,24 @@ function saveGLCache(data){
   try{sessionStorage.setItem(glCacheKey(),JSON.stringify({ts:Date.now(),data}));}catch{}
 }
 
-function frameLabel(h){
-  if(h===0)return{label:'Now',offset:''};
-  const base=new Date();base.setMinutes(0,0,0);
-  const ft=new Date(base.getTime()+h*3600*1000);
+function frameLabel(h,era5StartMs){
   const DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const MONS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  if(era5StartMs==null){
+    // GFS: relative to now
+    if(h===0)return{label:'Now',offset:''};
+    const base=new Date();base.setMinutes(0,0,0);
+    const ft=new Date(base.getTime()+h*3600*1000);
+    const hh=String(ft.getUTCHours()).padStart(2,'0');
+    return{label:`${DAYS[ft.getUTCDay()]} ${MONS[ft.getUTCMonth()]} ${ft.getUTCDate()} · ${hh} UTC`,offset:`+${h}h`};
+  }
+  // ERA5: absolute dates
+  const ft=new Date(era5StartMs+h*3600*1000);
   const hh=String(ft.getUTCHours()).padStart(2,'0');
-  return{
-    label:`${DAYS[ft.getUTCDay()]} ${MONS[ft.getUTCMonth()]} ${ft.getUTCDate()} · ${hh} UTC`,
-    offset:`+${h}h`
-  };
+  return{label:`${DAYS[ft.getUTCDay()]} ${MONS[ft.getUTCMonth()]} ${ft.getUTCDate()} · ${hh} UTC`,offset:'ERA5'};
 }
 
 async function loadGLData(){
-  // Try cache first
   const cached=loadGLCache();
   if(cached){
     frames=cached;
@@ -328,18 +384,30 @@ async function loadGLData(){
     return;
   }
 
-  // Initialize frames
-  frames=ANIM_HOURS.map(h=>{const{label,offset}=frameLabel(h);return{h,label,offset,points:[]};});
+  let era5StartMs=null;
+  let fetchFn;
+
+  if(currentMode==='era5'){
+    const{start,end,startMs}=era5Dates();
+    era5StartMs=startMs;
+    fetchFn=(lat,lon)=>fetchRawERA5(lat,lon,start,end);
+    document.getElementById('load-title').textContent='Loading ERA5 historical ducting data…';
+  } else {
+    fetchFn=(lat,lon)=>fetchRawOM(lat,lon);
+    document.getElementById('load-title').textContent='Loading Great Lakes ducting data…';
+  }
+
+  frames=ANIM_HOURS.map(h=>{const{label,offset}=frameLabel(h,era5StartMs);return{h,label,offset,points:[]};});
 
   const total=GL_PTS.length;
   let done=0;
-  const BATCH=15;
+  const BATCH=20;
 
   for(let i=0;i<GL_PTS.length;i+=BATCH){
     const batch=GL_PTS.slice(i,i+BATCH);
     await Promise.all(batch.map(async([lat,lon])=>{
       try{
-        const{hourly,elevation}=await fetchRawOM(lat,lon);
+        const{hourly,elevation}=await fetchFn(lat,lon);
         for(let fi=0;fi<ANIM_HOURS.length;fi++){
           const s=scorePoint(hourly,ANIM_HOURS[fi],elevation);
           if(s>0)frames[fi].points.push([lat,lon,+(s/100).toFixed(3)]);
@@ -375,7 +443,7 @@ function renderFrame(idx){
 
   // Time overlay on map
   const tsEl=document.getElementById('ts-overlay');
-  tsEl.textContent=frame.label+(frame.offset?'  ·  +'+frame.h+'h':'');
+  tsEl.textContent=frame.label+(frame.offset?' · '+frame.offset:'');
   tsEl.classList.remove('hidden');
 
   // Controls bar
@@ -416,8 +484,9 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
   maxZoom:19
 }).addTo(lmap);
 
+// Radius/blur tuned for 0.5° grid (~50 km spacing)
 const heatLayer=L.heatLayer([],{
-  radius:55,blur:42,maxZoom:10,
+  radius:38,blur:30,maxZoom:10,
   gradient:{0:'transparent',0.04:'#2ea043',0.25:'#3fb950',0.50:'#d29922',0.75:'#f0883e',1.0:'#f85149'}
 }).addTo(lmap);
 
@@ -432,6 +501,31 @@ lmap.on('click',e=>{
       <a class="popup-link" href="${href}">Open Site Analysis &rarr;</a>`)
     .openOn(lmap);
 });
+
+
+// ══════════════════════════════════════════════════════
+// MODE TOGGLE
+// ══════════════════════════════════════════════════════
+function switchMode(mode){
+  if(mode===currentMode)return;
+  currentMode=mode;
+  document.getElementById('btn-mode-gfs').classList.toggle('active',mode==='gfs');
+  document.getElementById('btn-mode-era5').classList.toggle('active',mode==='era5');
+  document.getElementById('mode-subtitle').textContent=
+    mode==='era5'
+      ?"ERA5 Historical (past 7 days)  ·  n41 (2593 MHz)  ·  Click map for site analysis"
+      :"7-Day GFS Forecast  ·  n41 (2593 MHz)  ·  Click map for site analysis";
+  pauseAnimation();
+  frames=[];
+  currentFrame=0;
+  document.getElementById('load-overlay').classList.remove('hidden');
+  document.getElementById('load-bar').style.width='0';
+  document.getElementById('load-status').textContent='Initializing…';
+  loadGLData();
+}
+
+document.getElementById('btn-mode-gfs').addEventListener('click',()=>switchMode('gfs'));
+document.getElementById('btn-mode-era5').addEventListener('click',()=>switchMode('era5'));
 
 
 // ══════════════════════════════════════════════════════
