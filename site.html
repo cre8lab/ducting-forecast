@@ -353,7 +353,7 @@ const MAP_HIST_HOURS = [0,6,12,18];
 
 function _omVars(){
   const plev=PLEVELS.flatMap(lv=>[`temperature_${lv}hPa`,`dewpoint_${lv}hPa`,`geopotential_height_${lv}hPa`]).join(',');
-  return plev+',temperature_2m,dewpoint_2m,surface_pressure,temperature_80m,relativehumidity_80m';
+  return plev+',temperature_2m,dewpoint_2m,surface_pressure,temperature_80m,relativehumidity_80m,skin_temperature';
 }
 
 function todayStr(){return new Date().toISOString().split('T')[0]}
@@ -383,25 +383,51 @@ function extractLevels(hourly,h,elev_m){
     if(T<-90||T>60)return null;
     return{pressure_hPa:lv,height_m:H,temp_C:T,dewpoint_C:(Td<-90?T-25:Td)};
   }).filter(Boolean);
-  const T2=hourly['temperature_2m']?.[h];
-  const Td2=hourly['dewpoint_2m']?.[h];
-  const Ps=hourly['surface_pressure']?.[h];
-  const T80=hourly['temperature_80m']?.[h];
-  const RH80=hourly['relativehumidity_80m']?.[h];
-  if(T2!=null&&Td2!=null&&Ps!=null&&T2>-90&&T2<60){
-    const hSurf=(elev_m??0)+2;
-    const surf={pressure_hPa:Ps,height_m:hSurf,temp_C:T2,dewpoint_C:(Td2<-90?T2-25:Td2)};
-    // Insert 80m boundary layer level when available — resolves the critical near-surface gap
-    if(T80!=null&&T80>-90&&T80<60&&RH80!=null&&RH80>=0&&RH80<=105){
-      const h80=(elev_m??0)+80;
-      const Td80=T80-(100-Math.min(100,RH80))/5;
-      const P80=Ps*Math.exp(-80/(29.3*((T2+T80)/2+273.15)));
-      const lv80={pressure_hPa:+P80.toFixed(1),height_m:h80,temp_C:T80,dewpoint_C:+Td80.toFixed(1)};
-      return[surf,lv80,...levels.filter(l=>l.height_m>h80+5)];
-    }
-    return[surf,...levels.filter(l=>l.height_m>hSurf+5)];
+
+  const T2   =hourly['temperature_2m']?.[h];
+  const Td2  =hourly['dewpoint_2m']?.[h];
+  const Ps   =hourly['surface_pressure']?.[h];
+  const T80  =hourly['temperature_80m']?.[h];
+  const RH80 =hourly['relativehumidity_80m']?.[h];
+  const Tskin=hourly['skin_temperature']?.[h];
+
+  if(T2==null||Td2==null||Ps==null||T2<=-90||T2>=60)return levels;
+
+  const h0   =elev_m??0;
+  const Td2c =Td2<-90?T2-25:Td2;
+
+  // 80m boundary layer level (hypsometric P, Magnus Td)
+  let lv80=null;
+  if(T80!=null&&T80>-90&&T80<60&&RH80!=null&&RH80>=0&&RH80<=105){
+    const h80=h0+80;
+    const Td80=T80-(100-Math.min(100,RH80))/5;
+    const P80=Ps*Math.exp(-80/(29.3*((T2+T80)/2+273.15)));
+    lv80={pressure_hPa:+P80.toFixed(1),height_m:h80,temp_C:T80,dewpoint_C:+Td80.toFixed(1)};
   }
-  return levels;
+
+  // Evaporation duct proxy: skin warmer than 2m air + moist air = open water surface
+  // GFS 2m obs = ambient air above the duct; skin = near-saturated water surface
+  const dewDep=T2-Td2c;
+  const evapDuct=Tskin!=null&&Tskin>-90&&Tskin<60&&Tskin>T2+0.5&&dewDep<10;
+
+  let baseLevels,nearCut;
+  if(evapDuct){
+    const h_e=Math.max(8,Math.min(60,Math.round(3*(Tskin-Td2c))));
+    const Psk=Ps*Math.exp(-h0/(29.3*(Tskin+273.15)));
+    const Phe=Ps*Math.exp(-(h0+h_e)/(29.3*((Tskin+T2)/2+273.15)));
+    baseLevels=[
+      {pressure_hPa:+Psk.toFixed(1),height_m:h0,      temp_C:Tskin,dewpoint_C:+(Tskin-0.5).toFixed(1)},
+      {pressure_hPa:+Phe.toFixed(1),height_m:h0+h_e,  temp_C:T2,   dewpoint_C:Td2c}
+    ];
+    nearCut=h0+h_e+5;
+  }else{
+    baseLevels=[{pressure_hPa:Ps,height_m:h0+2,temp_C:T2,dewpoint_C:Td2c}];
+    nearCut=h0+7;
+  }
+
+  const pCut=lv80?h0+85:nearCut;
+  return lv80?[...baseLevels,lv80,...levels.filter(l=>l.height_m>pCut)]
+             :[...baseLevels,...levels.filter(l=>l.height_m>pCut)];
 }
 
 async function fetchSoundings(lat,lon,date){

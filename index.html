@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KD9WXY — Great Lakes Ducting Loop</title>
+<title>KD9WXY — CONUS Ducting Loop</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -110,7 +110,7 @@ body{display:flex;flex-direction:column}
 <div id="hdr">
   <div class="callsign">KD9WXY<small>Ham · 5G Engineer</small></div>
   <div>
-    <div class="htitle">Great Lakes Ducting Loop</div>
+    <div class="htitle">CONUS Ducting Loop</div>
     <div class="hsub" id="mode-subtitle">7-Day GFS Forecast &nbsp;·&nbsp; n41 (2593 MHz) &nbsp;·&nbsp; Click map for site analysis</div>
   </div>
   <div class="spacer"></div>
@@ -249,8 +249,8 @@ const PLEVELS  = [1000,975,950,925,900,850,800,750,700,600,500,400,300];
 
 function _omVars(){
   const plev=PLEVELS.flatMap(lv=>[`temperature_${lv}hPa`,`dewpoint_${lv}hPa`,`geopotential_height_${lv}hPa`]).join(',');
-  // temperature_80m + relativehumidity_80m fill the critical near-surface gap (2m → 1000 hPa)
-  return plev+',temperature_2m,dewpoint_2m,surface_pressure,windspeed_10m,temperature_80m,relativehumidity_80m';
+  // temperature_80m + relativehumidity_80m fill the near-surface gap; skin_temperature drives evaporation duct model
+  return plev+',temperature_2m,dewpoint_2m,surface_pressure,windspeed_10m,temperature_80m,relativehumidity_80m,skin_temperature';
 }
 
 async function fetchRawOM(lat,lon){
@@ -293,30 +293,52 @@ function extractLevels(hourly,h,elev_m){
     return{pressure_hPa:lv,height_m:H,temp_C:T,dewpoint_C:(Td<-90?T-25:Td)};
   }).filter(Boolean);
 
-  const T2=hourly['temperature_2m']?.[h];
-  const Td2=hourly['dewpoint_2m']?.[h];
-  const Ps=hourly['surface_pressure']?.[h];
-  const T80=hourly['temperature_80m']?.[h];
-  const RH80=hourly['relativehumidity_80m']?.[h];
+  const T2   =hourly['temperature_2m']?.[h];
+  const Td2  =hourly['dewpoint_2m']?.[h];
+  const Ps   =hourly['surface_pressure']?.[h];
+  const T80  =hourly['temperature_80m']?.[h];
+  const RH80 =hourly['relativehumidity_80m']?.[h];
+  const Tskin=hourly['skin_temperature']?.[h];
 
-  if(T2!=null&&Td2!=null&&Ps!=null&&T2>-90&&T2<60){
-    const hSurf=(elev_m??0)+2;
-    const surf={pressure_hPa:Ps,height_m:hSurf,temp_C:T2,dewpoint_C:(Td2<-90?T2-25:Td2)};
+  if(T2==null||Td2==null||Ps==null||T2<=-90||T2>=60)return levels;
 
-    // Insert 80m boundary layer level when available — resolves the critical near-surface gap
-    if(T80!=null&&T80>-90&&T80<60&&RH80!=null&&RH80>=0&&RH80<=105){
-      const h80=(elev_m??0)+80;
-      // Magnus dewpoint approximation from RH
-      const Td80=T80-(100-Math.min(100,RH80))/5;
-      // Hypsometric pressure estimate: P(z) = Ps * exp(-z / (Rd/g * Tmean))
-      const P80=Ps*Math.exp(-80/(29.3*((T2+T80)/2+273.15)));
-      const lv80={pressure_hPa:+P80.toFixed(1),height_m:h80,temp_C:T80,dewpoint_C:+Td80.toFixed(1)};
-      return[surf,lv80,...levels.filter(l=>l.height_m>h80+5)];
-    }
+  const h0   =elev_m??0;
+  const Td2c =Td2<-90?T2-25:Td2;
 
-    return[surf,...levels.filter(l=>l.height_m>hSurf+5)];
+  // 80m boundary layer level (hypsometric P, Magnus Td)
+  let lv80=null;
+  if(T80!=null&&T80>-90&&T80<60&&RH80!=null&&RH80>=0&&RH80<=105){
+    const h80=h0+80;
+    const Td80=T80-(100-Math.min(100,RH80))/5;
+    const P80=Ps*Math.exp(-80/(29.3*((T2+T80)/2+273.15)));
+    lv80={pressure_hPa:+P80.toFixed(1),height_m:h80,temp_C:T80,dewpoint_C:+Td80.toFixed(1)};
   }
-  return levels;
+
+  // Evaporation duct proxy: skin warmer than 2m air + moist air = open water surface
+  // GFS 2m obs = ambient air above the duct; skin = near-saturated water surface
+  const dewDep=T2-Td2c;
+  const evapDuct=Tskin!=null&&Tskin>-90&&Tskin<60&&Tskin>T2+0.5&&dewDep<10;
+
+  let baseLevels,nearCut;
+  if(evapDuct){
+    // Estimated duct height (m): empirical ~3× air-water dewpoint spread, capped 8-60m
+    const h_e=Math.max(8,Math.min(60,Math.round(3*(Tskin-Td2c))));
+    const Psk=Ps*Math.exp(-h0/(29.3*(Tskin+273.15)));
+    const Phe=Ps*Math.exp(-(h0+h_e)/(29.3*((Tskin+T2)/2+273.15)));
+    // skin (0m, ~98% RH) → duct top (h_e, GFS 2m ambient)
+    baseLevels=[
+      {pressure_hPa:+Psk.toFixed(1),height_m:h0,      temp_C:Tskin,dewpoint_C:+(Tskin-0.5).toFixed(1)},
+      {pressure_hPa:+Phe.toFixed(1),height_m:h0+h_e,  temp_C:T2,   dewpoint_C:Td2c}
+    ];
+    nearCut=h0+h_e+5;
+  }else{
+    baseLevels=[{pressure_hPa:Ps,height_m:h0+2,temp_C:T2,dewpoint_C:Td2c}];
+    nearCut=h0+7;
+  }
+
+  const pCut=lv80?h0+85:nearCut;
+  return lv80?[...baseLevels,lv80,...levels.filter(l=>l.height_m>pCut)]
+             :[...baseLevels,...levels.filter(l=>l.height_m>pCut)];
 }
 
 function scorePoint(hourly,h,elevation){
@@ -330,10 +352,10 @@ function scorePoint(hourly,h,elevation){
 
 
 // ══════════════════════════════════════════════════════
-// GREAT LAKES GRID  (0.5° × 0.5°, 779 points, 40-49°N, 74-94°W)
+// CONUS GRID  (1° × 1°, 1620 points, 24-50°N, 125-66°W)
 // ══════════════════════════════════════════════════════
-const GL_LATS = Array.from({length:19},(_,i)=>40+i*0.5);   // 40..49 at 0.5°
-const GL_LONS = Array.from({length:41},(_,i)=>-94+i*0.5);  // -94..-74 at 0.5°
+const GL_LATS = Array.from({length:27},(_,i)=>24+i);        // 24..50 at 1°
+const GL_LONS = Array.from({length:60},(_,i)=>-125+i);      // -125..-66 at 1°
 const GL_PTS  = GL_LATS.flatMap(lat=>GL_LONS.map(lon=>[lat,lon]));
 
 // Animation: every 6 h for 7 days = 28 frames
@@ -347,7 +369,7 @@ let animTimer = null;
 let frameMs = 500;
 let currentMode = 'gfs';  // 'gfs' | 'era5'
 
-function glCacheKey(){return`kd9wxy_gl_v3_${currentMode}_${new Date().toISOString().split('T')[0]}`}
+function glCacheKey(){return`kd9wxy_gl_v4_${currentMode}_${new Date().toISOString().split('T')[0]}`}
 const GL_TTL = 30*60*1000;
 
 function loadGLCache(){
@@ -401,7 +423,7 @@ async function loadGLData(){
 
   const total=GL_PTS.length;
   let done=0;
-  const BATCH=20;
+  const BATCH=50;
 
   for(let i=0;i<GL_PTS.length;i+=BATCH){
     const batch=GL_PTS.slice(i,i+BATCH);
@@ -477,16 +499,16 @@ function setSpeed(ms){
 // ══════════════════════════════════════════════════════
 // MAP INIT
 // ══════════════════════════════════════════════════════
-const lmap=L.map('map',{zoomControl:true,preferCanvas:true}).setView([44.5,-84],6.5);
+const lmap=L.map('map',{zoomControl:true,preferCanvas:true}).setView([38,-96],4);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
   attribution:'&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> &copy; <a href="https://carto.com">CARTO</a>',
   maxZoom:19
 }).addTo(lmap);
 
-// Radius/blur tuned for 0.5° grid (~50 km spacing)
+// Radius/blur tuned for 1° grid (~100 km spacing) at CONUS zoom
 const heatLayer=L.heatLayer([],{
-  radius:38,blur:30,maxZoom:10,
+  radius:40,blur:32,maxZoom:10,
   gradient:{0:'transparent',0.04:'#2ea043',0.25:'#3fb950',0.50:'#d29922',0.75:'#f0883e',1.0:'#f85149'}
 }).addTo(lmap);
 
@@ -513,8 +535,8 @@ function switchMode(mode){
   document.getElementById('btn-mode-era5').classList.toggle('active',mode==='era5');
   document.getElementById('mode-subtitle').textContent=
     mode==='era5'
-      ?"ERA5 Historical (past 7 days)  ·  n41 (2593 MHz)  ·  Click map for site analysis"
-      :"7-Day GFS Forecast  ·  n41 (2593 MHz)  ·  Click map for site analysis";
+      ?"ERA5 Historical (past 7 days)  ·  n41 (2593 MHz)  ·  CONUS 1° grid"
+      :"7-Day GFS Forecast  ·  n41 (2593 MHz)  ·  CONUS 1° grid";
   pauseAnimation();
   frames=[];
   currentFrame=0;
