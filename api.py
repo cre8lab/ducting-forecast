@@ -2,12 +2,13 @@
 FastAPI server — KD9WXY Troposcatter/Ducting Forecast Tool.
 
 Endpoints:
-  GET /                              → frontend
-  GET /api/current?lat=&lon=         → current sounding analysis
-  GET /api/forecast?lat=&lon=        → 48-hour timeline
-  GET /api/map/stream                → SSE stream of CONUS grid (all hours)
-  GET /api/geocode?q=Green+Bay+WI   → city/state → lat/lon
-  GET /api/physics                   → physics reference
+  GET /                                    → frontend
+  GET /api/current?lat=&lon=               → current sounding analysis (GFS hour 0)
+  GET /api/forecast?lat=&lon=              → 7-day GFS forecast timeline
+  GET /api/forecast?lat=&lon=&date=YYYY-MM-DD → ERA5 archive for a past date
+  GET /api/map/stream                      → SSE stream of CONUS grid (all hours)
+  GET /api/geocode?q=Green+Bay+WI         → city/state → lat/lon
+  GET /api/physics                         → physics reference
 """
 
 import asyncio
@@ -62,11 +63,12 @@ async def current_analysis(
 
 @app.get("/api/forecast")
 async def forecast(
-    lat: float = Query(..., ge=-90,  le=90),
-    lon: float = Query(..., ge=-180, le=180),
+    lat:  float = Query(..., ge=-90,  le=90),
+    lon:  float = Query(..., ge=-180, le=180),
+    date: str   = Query(None, description="YYYY-MM-DD — omit for GFS 7-day, supply a past date for ERA5 archive"),
 ):
     try:
-        result = engine.run_forecast(lat, lon)
+        result = engine.run_forecast(lat, lon, date=date)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     if "error" in result:

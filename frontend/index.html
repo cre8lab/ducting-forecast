@@ -94,6 +94,43 @@ button:disabled { opacity:.4; cursor:not-allowed; }
 
 .mode-group { display:flex; gap:4px; }
 
+/* ── Time bar ───────────────────────────────────────────────────────── */
+.timebar {
+  background:#0a0f16;
+  border-bottom:1px solid var(--border);
+  padding:5px 14px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-shrink:0;
+  flex-wrap:wrap;
+}
+.timebar label { color:var(--muted); font-size:11px; white-space:nowrap; }
+.timebar input[type=date] {
+  background:var(--bg); border:1px solid var(--border); border-radius:5px;
+  color:var(--text); padding:3px 7px; font-size:12px; cursor:pointer;
+}
+.timebar input[type=date]:focus { outline:none; border-color:var(--accent); }
+.day-nav { display:flex; gap:2px; }
+.day-nav button {
+  background:var(--bg); border:1px solid var(--border); color:var(--muted);
+  font-size:13px; padding:2px 7px; border-radius:4px;
+}
+.day-nav button:hover { border-color:var(--accent); color:var(--accent); opacity:1; }
+
+.mode-badge {
+  display:inline-flex; align-items:center; gap:5px;
+  border-radius:100px; padding:2px 9px; font-size:10px; font-weight:600;
+}
+.badge-live { background:#122d1c; border:1px solid #3fb95066; color:var(--green); }
+.badge-hist { background:#2d2203; border:1px solid #d2992266; color:var(--yellow); }
+.badge-fc   { background:#1c2340; border:1px solid #58a6ff66; color:var(--accent); }
+.pulse {
+  width:6px; height:6px; border-radius:50%; background:var(--green);
+  animation:pulse 1.5s infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
 /* ── Progress bar ───────────────────────────────────────────────────── */
 #progress-bar-wrap {
   height:3px;
@@ -271,10 +308,22 @@ tr:last-child td { border-bottom:none; }
     <button id="btn-mapview"  class="btn-ghost">Map</button>
   </div>
   <div id="site-buttons" style="display:flex;gap:4px;">
-    <button id="btn-forecast">48hr</button>
+    <button id="btn-forecast">Forecast</button>
     <button id="btn-current" class="btn-ghost">Now</button>
   </div>
 </header>
+
+<!-- ── Time bar ─────────────────────────────────────────────────────── -->
+<div class="timebar">
+  <label>Date:</label>
+  <div class="day-nav">
+    <button id="btn-prev-day" title="Previous day">&#8249;</button>
+    <button id="btn-next-day" title="Next day">&#8250;</button>
+  </div>
+  <input type="date" id="date-pick">
+  <button id="btn-live" class="btn-ghost" style="font-size:10px;padding:3px 8px;">Live</button>
+  <span id="mode-badge" class="mode-badge badge-live"><span class="pulse"></span>Live &nbsp;·&nbsp; GFS 7-day</span>
+</div>
 
 <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
 <div id="error-msg"></div>
@@ -314,7 +363,7 @@ tr:last-child td { border-bottom:none; }
 
       <!-- Timeline -->
       <div class="panel" style="flex-shrink:0;">
-        <h2>48-Hour Risk Timeline</h2>
+        <h2>Risk Timeline (7-Day / ERA5)</h2>
         <div class="chart-wrap-sm"><canvas id="chart-timeline"></canvas></div>
         <div id="timeline-hint" style="text-align:center;color:var(--muted);font-size:11px;padding:6px;">Fetch forecast to see timeline.</div>
       </div>
@@ -360,12 +409,15 @@ tr:last-child td { border-bottom:none; }
         <h2>Forecast Hour</h2>
         <div class="hour-btns" id="hour-btns">
           <button class="hour-btn active" data-h="0">Now</button>
-          <button class="hour-btn" data-h="6">+6h</button>
           <button class="hour-btn" data-h="12">+12h</button>
-          <button class="hour-btn" data-h="18">+18h</button>
           <button class="hour-btn" data-h="24">+24h</button>
           <button class="hour-btn" data-h="36">+36h</button>
           <button class="hour-btn" data-h="48">+48h</button>
+          <button class="hour-btn" data-h="72">+3d</button>
+          <button class="hour-btn" data-h="96">+4d</button>
+          <button class="hour-btn" data-h="120">+5d</button>
+          <button class="hour-btn" data-h="144">+6d</button>
+          <button class="hour-btn" data-h="168">+7d</button>
         </div>
         <div id="map-status" style="font-size:11px;color:var(--muted);">Press Load Map to fetch CONUS grid.</div>
       </div>
@@ -406,6 +458,7 @@ tr:last-child td { border-bottom:none; }
 // ── State ────────────────────────────────────────────────────────────────────
 let currentLat = 44.519, currentLon = -88.020;   // Green Bay default
 let currentMode = "site";   // "site" | "map"
+let selectedDate = null;     // null = live GFS, "YYYY-MM-DD" = specific date
 let selectedMapHour = 0;
 let gridData = [];           // [{lat, lon, hours: {0:{...}, 6:{...}, ...}}]
 let mapHeatLayer = null;
@@ -477,6 +530,66 @@ async function handleSearch() {
 document.getElementById('btn-geocode').addEventListener('click', handleSearch);
 document.getElementById('location-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') handleSearch();
+});
+
+
+// ── Date / time bar ───────────────────────────────────────────────────────────
+function todayUTC() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function isHistorical(date) {
+  return date && date < todayUTC();
+}
+
+function initDatePicker() {
+  const dp = document.getElementById('date-pick');
+  dp.min = '1979-01-01';
+  // Max = today + 6 days (GFS 7-day)
+  const maxDate = new Date();
+  maxDate.setDate(maxDate.getDate() + 6);
+  dp.max = maxDate.toISOString().split('T')[0];
+  dp.value = '';
+}
+
+function setDateMode(date) {
+  selectedDate = date || null;
+  const dp = document.getElementById('date-pick');
+  dp.value = date || '';
+  const badge = document.getElementById('mode-badge');
+  const hist = isHistorical(date);
+  if (!date) {
+    badge.className = 'mode-badge badge-live';
+    badge.innerHTML = '<span class="pulse"></span>Live &nbsp;·&nbsp; GFS 7-day';
+  } else if (hist) {
+    badge.className = 'mode-badge badge-hist';
+    badge.textContent = 'ERA5 Archive: ' + date;
+  } else {
+    badge.className = 'mode-badge badge-fc';
+    badge.textContent = 'GFS Forecast: ' + date;
+  }
+  const forecastBtn = document.getElementById('btn-forecast');
+  if (forecastBtn) {
+    forecastBtn.textContent = hist ? 'Load Day' : 'Forecast';
+  }
+}
+
+document.getElementById('date-pick').addEventListener('change', e => setDateMode(e.target.value || null));
+document.getElementById('btn-live').addEventListener('click', () => setDateMode(null));
+document.getElementById('btn-prev-day').addEventListener('click', () => {
+  const cur = selectedDate || todayUTC();
+  const d = new Date(cur + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  const nd = d.toISOString().split('T')[0];
+  if (nd >= '1979-01-01') setDateMode(nd);
+});
+document.getElementById('btn-next-day').addEventListener('click', () => {
+  const cur = selectedDate || todayUTC();
+  const d = new Date(cur + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  const nd = d.toISOString().split('T')[0];
+  const max = document.getElementById('date-pick').max;
+  if (nd <= max) setDateMode(nd);
 });
 
 
@@ -728,10 +841,24 @@ function updateMProfile(profile) {
   mProfileChart.update();
 }
 
-function updateTimeline(timeline) {
+function updateTimeline(timeline, mode) {
   if (!timelineChart) initTimelineChart();
   document.getElementById('timeline-hint').style.display = 'none';
-  timelineChart.data.labels = timeline.map(t => `+${t.fcst_hours}h`);
+
+  const makeLabel = t => {
+    if (t.valid_time) {
+      try {
+        const d = new Date(t.valid_time);
+        if (mode === 'historical') {
+          return String(d.getUTCHours()).padStart(2,'0') + 'Z';
+        }
+        return `${d.getUTCMonth()+1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2,'0')}Z`;
+      } catch {}
+    }
+    return `+${t.fcst_hours}h`;
+  };
+
+  timelineChart.data.labels = timeline.map(makeLabel);
   timelineChart.data.datasets[0].data = timeline.map(t => t.risk.score);
   timelineChart.data.datasets[0].backgroundColor = timeline.map(t => RISK_COLORS[t.risk.level]||'#30363d');
   timelineChart.update();
@@ -805,7 +932,12 @@ function setBusy(busy) {
   ['btn-forecast','btn-current','btn-geocode'].forEach(id => {
     document.getElementById(id).disabled = busy;
   });
-  document.getElementById('btn-forecast').textContent = busy ? 'Loading…' : '48hr';
+  if (!busy) {
+    document.getElementById('btn-forecast').textContent =
+      isHistorical(selectedDate) ? 'Load Day' : 'Forecast';
+  } else {
+    document.getElementById('btn-forecast').textContent = 'Loading…';
+  }
 }
 
 async function fetchCurrent() {
@@ -832,10 +964,13 @@ async function fetchForecast() {
   if (!currentLat) { showError('Search a location first.'); return; }
   clearError();
   setBusy(true);
-  document.getElementById('timeline-hint').textContent = 'Fetching 48hr GFS forecast…';
+  const modeLabel = isHistorical(selectedDate) ? 'ERA5 archive' : 'GFS 7-day forecast';
+  document.getElementById('timeline-hint').textContent = `Fetching ${modeLabel}…`;
   document.getElementById('timeline-hint').style.display = 'block';
   try {
-    const r = await fetch(`/api/forecast?lat=${currentLat}&lon=${currentLon}`);
+    let url = `/api/forecast?lat=${currentLat}&lon=${currentLon}`;
+    if (selectedDate) url += `&date=${selectedDate}`;
+    const r = await fetch(url);
     if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
     const d = await r.json();
     const cur = d.timeline?.[0];
@@ -846,10 +981,13 @@ async function fetchForecast() {
       updateDuctTable(cur.ducts);
       updateSoundingSummary(cur);
       updateWaterContext(cur.water_context);
-      updateSiteMarker(currentLat, currentLon, cur.risk?.best_duct?.hop_km || 0);
+      updateSiteMarker(currentLat, currentLon, cur.risk?.best_duct?.max_hop_km || 0);
     }
-    updateTimeline(d.timeline);
-    setStatus(`Forecast loaded — peak: ${d.peak_risk?.level} at +${d.peak_risk?.fcst_hours}h`);
+    updateTimeline(d.timeline, d.mode);
+    const peakLabel = d.peak_risk?.valid_time
+      ? new Date(d.peak_risk.valid_time).toLocaleString('en-US', {month:'numeric',day:'numeric',hour:'2-digit',timeZone:'UTC'}) + ' UTC'
+      : `+${d.peak_risk?.fcst_hours}h`;
+    setStatus(`${d.mode === 'historical' ? 'ERA5' : 'GFS 7-day'} — peak: ${d.peak_risk?.level} at ${peakLabel}`);
   } catch(e) { showError(e.message); }
   finally { setBusy(false); }
 }
@@ -920,6 +1058,7 @@ function clearError() {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 initMProfileChart();
 initTimelineChart();
+initDatePicker();
 
 // Auto-geocode the default location
 handleSearch();

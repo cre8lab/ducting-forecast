@@ -2,8 +2,9 @@
 CONUS-wide ducting grid for thematic map view.
 
 Defines a 2.5° × 3° grid across the continental US (231 points).
-Each grid point fetches a single Open-Meteo GFS call that covers
-all forecast hours (0–48h), so the entire map costs 231 API calls.
+Each grid point fetches one Open-Meteo GFS call covering all 7-day
+forecast hours, so the full map costs 231 API calls regardless of
+how many hours are displayed.
 
 Designed for streaming: analyse_point_all_hours is thread-safe and
 synchronous — call it from asyncio.run_in_executor for parallelism.
@@ -20,7 +21,7 @@ import physics as phys
 LAT_MIN, LAT_MAX, LAT_STEP =  25.0, 50.0, 2.5
 LON_MIN, LON_MAX, LON_STEP = -125.0, -65.0, 3.0
 
-FORECAST_HOURS = [0, 6, 12, 18, 24, 36, 48]
+FORECAST_HOURS = [0, 12, 24, 36, 48, 72, 96, 120, 144, 168]   # every 12 h for 7 days
 
 
 def grid_points() -> list[tuple[float, float]]:

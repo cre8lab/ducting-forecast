@@ -36,28 +36,42 @@ def run_current_analysis(lat: float, lon: float) -> dict:
     return _analyse_sounding(sounding, lat, lon)
 
 
-def run_forecast(lat: float, lon: float) -> dict:
+def run_forecast(lat: float, lon: float, date: Optional[str] = None) -> dict:
     """
-    Fetch GFS soundings for the next 48 hours and compute ducting timeline.
+    Fetch soundings for a 7-day GFS forecast or a single ERA5 archive day.
+
+    Args:
+        date: ISO date string (YYYY-MM-DD).
+              Omit / None  → GFS 7-day forecast from now.
+              Past date    → ERA5 reanalysis for that calendar day (4 synoptic hours).
     """
-    soundings = noaa.fetch_forecast_soundings(lat, lon)
+    if date and noaa.is_historical(date):
+        soundings = noaa.fetch_historical_soundings(lat, lon, date)
+        mode      = "historical"
+        source    = f"ERA5 Reanalysis via Open-Meteo ({date})"
+    else:
+        soundings = noaa.fetch_forecast_soundings(lat, lon)
+        mode      = "forecast"
+        source    = f"NOAA GFS via Open-Meteo ({noaa.GFS_MODEL})"
 
     if not soundings:
         return {
-            "error": "Could not retrieve forecast soundings from NOAA.",
+            "error": "Could not retrieve soundings from Open-Meteo.",
             "lat": lat, "lon": lon,
         }
 
     timeline = [_analyse_sounding(s, lat, lon) for s in soundings]
 
     return {
-        "lat":            lat,
-        "lon":            lon,
-        "generated_utc":  datetime.now(timezone.utc).isoformat(),
-        "source":         "NOAA GFS via rucsoundings.noaa.gov",
-        "data_license":   "NOAA data is in the public domain (US Government)",
-        "timeline":       timeline,
-        "peak_risk":      _peak_risk(timeline),
+        "lat":           lat,
+        "lon":           lon,
+        "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "mode":          mode,
+        "date":          date,
+        "source":        source,
+        "data_license":  "Open-Meteo is free for non-commercial use. GFS/ERA5 are public domain.",
+        "timeline":      timeline,
+        "peak_risk":     _peak_risk(timeline),
     }
 
 
