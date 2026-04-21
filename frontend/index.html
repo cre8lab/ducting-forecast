@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KD9WXY — 5G n41 Ducting Forecast</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #0d1117;
+  --panel:   #161b22;
+  --border:  #30363d;
+  --accent:  #58a6ff;
+  --green:   #3fb950;
+  --yellow:  #d29922;
+  --orange:  #f0883e;
+  --red:     #f85149;
+  --text:    #c9d1d9;
+  --muted:   #8b949e;
+  --ham:     #f97316;  /* ham radio amber */
+}
+
+body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:14px; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+header {
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  padding:8px 14px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  flex-wrap:nowrap;
+  flex-shrink:0;
+}
+
+.callsign {
+  font-size:18px;
+  font-weight:700;
+  color:var(--ham);
+  letter-spacing:0.05em;
+  white-space:nowrap;
+}
+
+.callsign span { color:var(--muted); font-size:11px; font-weight:400; display:block; line-height:1; }
+
+.header-title { color:var(--accent); font-size:13px; font-weight:600; white-space:nowrap; }
+.header-sub   { color:var(--muted); font-size:11px; }
+
+.search-bar {
+  display:flex;
+  gap:6px;
+  align-items:center;
+  flex:1;
+  min-width:0;
+}
+
+.search-bar input[type=text] {
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:6px;
+  color:var(--text);
+  padding:5px 10px;
+  font-size:13px;
+  flex:1;
+  min-width:120px;
+}
+
+.search-bar input:focus { outline:none; border-color:var(--accent); }
+
+button {
+  background:var(--accent);
+  border:none;
+  border-radius:6px;
+  color:#000;
+  cursor:pointer;
+  font-size:12px;
+  font-weight:600;
+  padding:5px 12px;
+  white-space:nowrap;
+  transition:opacity .15s;
+}
+button:hover   { opacity:.85; }
+button:disabled { opacity:.4; cursor:not-allowed; }
+
+.btn-ghost { background:var(--panel); border:1px solid var(--border); color:var(--text); }
+.btn-active { background:var(--ham); color:#000; }
+
+.mode-group { display:flex; gap:4px; }
+
+/* ── Progress bar ───────────────────────────────────────────────────── */
+#progress-bar-wrap {
+  height:3px;
+  background:var(--border);
+  flex-shrink:0;
+  display:none;
+}
+#progress-bar { height:100%; background:var(--ham); transition:width .2s; width:0%; }
+
+/* ── Main layout ────────────────────────────────────────────────────── */
+.main {
+  flex:1;
+  display:grid;
+  grid-template-columns:1fr 360px;
+  min-height:0;
+  position:relative;
+}
+
+.main.map-full { grid-template-columns:1fr 280px; }
+
+#map { background:#111; }
+
+.right-col {
+  display:flex;
+  flex-direction:column;
+  border-left:1px solid var(--border);
+  overflow:hidden;
+  min-height:0;
+}
+
+/* ── Panels ─────────────────────────────────────────────────────────── */
+.panel {
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  padding:12px 14px;
+}
+
+.panel h2 {
+  font-size:11px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--muted);
+  margin-bottom:10px;
+}
+
+.scroll-panel { overflow-y:auto; flex:1; }
+
+/* ── Risk card ──────────────────────────────────────────────────────── */
+.risk-card { border-radius:8px; padding:10px 14px; display:flex; align-items:center; gap:14px; margin-bottom:8px; }
+.risk-none     { background:#1c2128; border:1px solid var(--border); }
+.risk-low      { background:#122d1c; border:1px solid #2ea04388; }
+.risk-moderate { background:#2d2203; border:1px solid #d2992288; }
+.risk-high     { background:#2d1800; border:1px solid #f0883e88; }
+.risk-severe   { background:#2d0a0a; border:1px solid #f8514988; }
+
+.risk-score { font-size:30px; font-weight:700; min-width:44px; text-align:center; line-height:1; }
+.score-none { color:var(--muted); } .score-low { color:var(--green); }
+.score-moderate { color:var(--yellow); } .score-high { color:var(--orange); }
+.score-severe { color:var(--red); }
+
+.risk-info h3 { font-size:13px; font-weight:600; margin-bottom:3px; }
+.risk-info p  { font-size:11px; color:var(--muted); line-height:1.5; }
+
+/* ── Chart containers ───────────────────────────────────────────────── */
+.chart-wrap { position:relative; height:160px; }
+.chart-wrap-sm { position:relative; height:110px; }
+
+/* ── Tables ─────────────────────────────────────────────────────────── */
+table { width:100%; border-collapse:collapse; font-size:11px; }
+th { color:var(--muted); text-align:left; padding:3px 6px; border-bottom:1px solid var(--border); font-weight:500; }
+td { padding:3px 6px; border-bottom:1px solid #21262d33; }
+tr:last-child td { border-bottom:none; }
+
+.tag { display:inline-block; border-radius:4px; padding:1px 5px; font-size:10px; font-weight:600; }
+.tag-ducting { background:#2d0a0a; color:var(--red); }
+.tag-super   { background:#2d1800; color:var(--orange); }
+.tag-normal  { background:#122d1c; color:var(--green); }
+
+/* ── Map Mode overlay controls ──────────────────────────────────────── */
+.map-controls-panel { display:none; }
+.map-controls-panel.active { display:block; }
+
+.hour-btns { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.hour-btn { font-size:11px; padding:4px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); cursor:pointer; }
+.hour-btn:hover  { border-color:var(--accent); color:var(--accent); }
+.hour-btn.active { background:var(--ham); border-color:var(--ham); color:#000; font-weight:700; }
+
+/* ── Legend ─────────────────────────────────────────────────────────── */
+.legend-bar {
+  height:14px;
+  border-radius:4px;
+  background:linear-gradient(to right, #00aa44, #88cc00, #ffcc00, #ff6600, #cc0000);
+  margin-bottom:4px;
+}
+.legend-labels { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); }
+
+.legend-items { display:flex; flex-direction:column; gap:3px; margin-top:8px; }
+.legend-item  { display:flex; align-items:center; gap:6px; font-size:11px; }
+.legend-swatch { width:12px; height:12px; border-radius:2px; flex-shrink:0; }
+
+/* ── Physics reference ──────────────────────────────────────────────── */
+.physics-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.eq-block { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:8px 12px; }
+.eq-block h4 { font-size:11px; color:var(--accent); margin-bottom:4px; }
+.eq-block code { font-family:"SFMono-Regular",Consolas,monospace; font-size:11px; color:var(--green); display:block; margin:2px 0; }
+.eq-block p { font-size:10px; color:var(--muted); line-height:1.5; margin-top:3px; }
+
+/* ── Bottom bar ─────────────────────────────────────────────────────── */
+.status-bar {
+  background:var(--panel);
+  border-top:1px solid var(--border);
+  padding:4px 14px;
+  font-size:11px;
+  color:var(--muted);
+  display:flex;
+  gap:16px;
+  flex-shrink:0;
+}
+.status-bar a { color:var(--accent); text-decoration:none; }
+
+#error-msg {
+  color:var(--red); background:#2d0a0a; border:1px solid #f8514944;
+  border-radius:6px; padding:8px 12px; margin:8px; display:none; font-size:12px;
+}
+
+/* ── Duct badges ────────────────────────────────────────────────────── */
+.duct-badge {
+  display:inline-flex; align-items:center; gap:5px;
+  background:var(--bg); border:1px solid var(--border);
+  border-radius:100px; padding:2px 9px; font-size:10px; margin:2px;
+}
+.dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.dot-surface { background:var(--accent); }
+.dot-elevated { background:var(--yellow); }
+
+/* ── Water body context panel ───────────────────────────────────────────── */
+.water-badge {
+  display:inline-flex; align-items:center; gap:5px;
+  background:#0d2233; border:1px solid #1d6fa477;
+  border-radius:100px; padding:3px 10px; font-size:11px;
+  color:#58c4f5; font-weight:600; margin-bottom:6px;
+}
+.water-badge-land {
+  display:inline-flex; align-items:center; gap:5px;
+  background:#1a1f29; border:1px solid var(--border);
+  border-radius:100px; padding:3px 10px; font-size:11px;
+  color:var(--muted); margin-bottom:6px;
+}
+
+/* Leaflet popup dark theme */
+.leaflet-popup-content-wrapper { background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:6px; }
+.leaflet-popup-tip { background:var(--panel); }
+.popup-risk { font-weight:700; font-size:13px; margin-bottom:4px; }
+.popup-score-none { color:var(--muted); } .popup-score-low { color:var(--green); }
+.popup-score-moderate { color:var(--yellow); } .popup-score-high { color:var(--orange); }
+.popup-score-severe { color:var(--red); }
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header>
+  <div class="callsign">KD9WXY<span>Ham / 5G Engineer</span></div>
+  <div>
+    <div class="header-title">Tropospheric Ducting Forecast</div>
+    <div class="header-sub">5G n41 (2496–2690 MHz) &nbsp;·&nbsp; NOAA GFS &nbsp;·&nbsp; First-principles ITU-R P.453</div>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="location-input" placeholder="Green Bay, WI  or  44.5,-88.0" value="Green Bay, WI">
+    <button id="btn-geocode" title="Search location">Search</button>
+  </div>
+  <div class="mode-group">
+    <button id="btn-site"     class="btn-ghost btn-active">Site</button>
+    <button id="btn-mapview"  class="btn-ghost">Map</button>
+  </div>
+  <div id="site-buttons" style="display:flex;gap:4px;">
+    <button id="btn-forecast">48hr</button>
+    <button id="btn-current" class="btn-ghost">Now</button>
+  </div>
+</header>
+
+<div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+<div id="error-msg"></div>
+
+<!-- ── Main ───────────────────────────────────────────────────────────── -->
+<div class="main" id="main-layout">
+  <div id="map"></div>
+
+  <div class="right-col">
+
+    <!-- ── SITE MODE ──────────────────────────────────────────────────── -->
+    <div id="site-panels">
+      <!-- Risk card -->
+      <div class="panel" style="flex-shrink:0;">
+        <h2>n41 Interference Risk</h2>
+        <div id="risk-card" class="risk-card risk-none">
+          <div class="risk-score score-none" id="risk-score">—</div>
+          <div class="risk-info">
+            <h3 id="risk-level">Awaiting Data</h3>
+            <p id="risk-desc">Search a location and press 48hr or Now.</p>
+          </div>
+        </div>
+        <div id="duct-badges"></div>
+      </div>
+
+      <!-- Water body context -->
+      <div id="water-context-panel" class="panel" style="flex-shrink:0;display:none;">
+        <h2>Water Body Context</h2>
+        <div id="water-context-detail" style="font-size:11px;color:var(--muted);line-height:1.6;"></div>
+      </div>
+
+      <!-- M-profile chart -->
+      <div class="panel" style="flex-shrink:0;">
+        <h2>Modified Refractivity M-Profile</h2>
+        <div class="chart-wrap"><canvas id="chart-mprofile"></canvas></div>
+      </div>
+
+      <!-- Timeline -->
+      <div class="panel" style="flex-shrink:0;">
+        <h2>48-Hour Risk Timeline</h2>
+        <div class="chart-wrap-sm"><canvas id="chart-timeline"></canvas></div>
+        <div id="timeline-hint" style="text-align:center;color:var(--muted);font-size:11px;padding:6px;">Fetch forecast to see timeline.</div>
+      </div>
+
+      <!-- Sounding / ducts (scrollable) -->
+      <div class="panel scroll-panel">
+        <h2>Detected Ducts</h2>
+        <div id="duct-table-wrap"><p style="color:var(--muted);font-size:12px;">No data.</p></div>
+
+        <h2 style="margin-top:14px;">Sounding Summary</h2>
+        <div id="sounding-summary"><p style="color:var(--muted);font-size:12px;">No data.</p></div>
+
+        <h2 style="margin-top:14px;">Physics Reference</h2>
+        <div class="physics-grid" style="margin-top:6px;">
+          <div class="eq-block">
+            <h4>Refractivity N (ITU-R P.453)</h4>
+            <code>N = 77.6·P/T + 373246·e/T²</code>
+            <p>P=hPa, T=K, e=vapor pressure (hPa)</p>
+          </div>
+          <div class="eq-block">
+            <h4>Modified Refractivity M</h4>
+            <code>M = N + (h/Rₑ)·10⁶</code>
+            <p>Ducting: dM/dh &lt; 0  (dN/dh &lt; -157 N/km)</p>
+          </div>
+          <div class="eq-block">
+            <h4>Critical Frequency</h4>
+            <code>f_c = c/(2h·√(2|ΔN|·10⁻⁶))</code>
+            <p>n41 (2.5 GHz) needs h &gt; ~50m duct</p>
+          </div>
+          <div class="eq-block">
+            <h4>Max Hop Distance</h4>
+            <code>θ_c = √(2|ΔN|·10⁻⁶) rad</code>
+            <code>d = 2·h / θ_c  km</code>
+            <p>Ducted n41: 200–600+ km typical</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MAP MODE ────────────────────────────────────────────────────── -->
+    <div id="map-panels" style="display:none;">
+      <div class="panel" style="flex-shrink:0;">
+        <h2>Forecast Hour</h2>
+        <div class="hour-btns" id="hour-btns">
+          <button class="hour-btn active" data-h="0">Now</button>
+          <button class="hour-btn" data-h="6">+6h</button>
+          <button class="hour-btn" data-h="12">+12h</button>
+          <button class="hour-btn" data-h="18">+18h</button>
+          <button class="hour-btn" data-h="24">+24h</button>
+          <button class="hour-btn" data-h="36">+36h</button>
+          <button class="hour-btn" data-h="48">+48h</button>
+        </div>
+        <div id="map-status" style="font-size:11px;color:var(--muted);">Press Load Map to fetch CONUS grid.</div>
+      </div>
+
+      <div class="panel" style="flex-shrink:0;">
+        <h2>Risk Legend</h2>
+        <div class="legend-bar"></div>
+        <div class="legend-labels"><span>None</span><span>Low</span><span>Moderate</span><span>High</span><span>Severe</span></div>
+        <div class="legend-items" style="margin-top:10px;">
+          <div class="legend-item"><div class="legend-swatch" style="background:transparent;border:1px solid var(--border);"></div> None (0)</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:#00aa44;"></div> Low (1–20)</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:#ffcc00;"></div> Moderate (21–50)</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:#ff6600;"></div> High (51–75)</div>
+          <div class="legend-item"><div class="legend-swatch" style="background:#cc0000;"></div> Severe (76–100)</div>
+        </div>
+      </div>
+
+      <!-- Selected cell detail (click map to populate) -->
+      <div class="panel scroll-panel" id="map-cell-detail">
+        <h2>Selected Cell</h2>
+        <p style="font-size:11px;color:var(--muted);">Click a cell on the map for details.</p>
+      </div>
+    </div>
+
+  </div><!-- right-col -->
+</div><!-- main -->
+
+<div class="status-bar">
+  <span>KD9WXY &nbsp;·&nbsp; Data: <a href="https://open-meteo.com" target="_blank">NOAA GFS via Open-Meteo</a> (public domain)</span>
+  <span id="status-msg"></span>
+  <span id="status-time"></span>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<script>
+"use strict";
+
+// ── State ────────────────────────────────────────────────────────────────────
+let currentLat = 44.519, currentLon = -88.020;   // Green Bay default
+let currentMode = "site";   // "site" | "map"
+let selectedMapHour = 0;
+let gridData = [];           // [{lat, lon, hours: {0:{...}, 6:{...}, ...}}]
+let mapHeatLayer = null;
+let mapCellLayer = null;    // GeoJSON rectangles
+let mapEventSource = null;
+let siteMarker = null;
+let ductCircle = null;
+let mProfileChart = null;
+let timelineChart = null;
+
+const RISK_COLORS = { none:'#30363d', low:'#3fb950', moderate:'#d29922', high:'#f0883e', severe:'#f85149' };
+const RISK_LABELS = { none:'No Ducting', low:'Low Risk', moderate:'Moderate Risk', high:'High Risk', severe:'Severe Risk' };
+const HEAT_HOURS  = [0, 6, 12, 18, 24, 36, 48];
+
+// ── Map setup ────────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl:true, preferCanvas:true }).setView([39, -96], 4);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom:19,
+}).addTo(map);
+
+map.on('click', e => {
+  if (currentMode === 'site') {
+    currentLat = +e.latlng.lat.toFixed(4);
+    currentLon = +e.latlng.lng.toFixed(4);
+    document.getElementById('location-input').value = `${currentLat}, ${currentLon}`;
+  }
+});
+
+
+// ── Geocoding ─────────────────────────────────────────────────────────────────
+async function geocodeLocation(query) {
+  const resp = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+  if (!resp.ok) {
+    const err = await resp.json();
+    throw new Error(err.detail || `Geocode failed (${resp.status})`);
+  }
+  return resp.json();
+}
+
+async function handleSearch() {
+  const q = document.getElementById('location-input').value.trim();
+  if (!q) return;
+
+  // Try "lat, lon" first
+  const latlon = q.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
+  if (latlon) {
+    currentLat = parseFloat(latlon[1]);
+    currentLon = parseFloat(latlon[2]);
+    updateSiteMarker(currentLat, currentLon);
+    setStatus(`Location: ${currentLat.toFixed(3)}, ${currentLon.toFixed(3)}`);
+    return;
+  }
+
+  // Geocode city/state
+  try {
+    const geo = await geocodeLocation(q);
+    currentLat = geo.lat;
+    currentLon = geo.lon;
+    document.getElementById('location-input').value = geo.label;
+    updateSiteMarker(currentLat, currentLon);
+    map.setView([currentLat, currentLon], 8);
+    setStatus(`Geocoded: ${geo.label} (${geo.source})`);
+  } catch(e) {
+    showError(e.message);
+  }
+}
+
+document.getElementById('btn-geocode').addEventListener('click', handleSearch);
+document.getElementById('location-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') handleSearch();
+});
+
+
+// ── Mode toggle ───────────────────────────────────────────────────────────────
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('site-panels').style.display   = mode === 'site' ? '' : 'none';
+  document.getElementById('map-panels').style.display    = mode === 'map'  ? '' : 'none';
+  document.getElementById('site-buttons').style.display  = mode === 'site' ? 'flex' : 'none';
+  document.getElementById('btn-site').classList.toggle('btn-active', mode === 'site');
+  document.getElementById('btn-mapview').classList.toggle('btn-active', mode === 'map');
+
+  if (mode === 'map') {
+    map.setView([39, -96], 4);
+    if (gridData.length === 0) loadMapView();
+  } else {
+    clearMapLayers();
+    if (siteMarker) siteMarker.addTo(map);
+  }
+}
+
+document.getElementById('btn-site').addEventListener('click', () => setMode('site'));
+document.getElementById('btn-mapview').addEventListener('click', () => setMode('map'));
+
+
+// ── CONUS Heatmap ─────────────────────────────────────────────────────────────
+function scoreToColor(score) {
+  if (score <= 0) return null;
+  const stops = [[0,[0,170,68]], [25,[136,204,0]], [50,[255,204,0]], [75,[255,102,0]], [100,[204,0,0]]];
+  for (let i = 1; i < stops.length; i++) {
+    if (score <= stops[i][0]) {
+      const t = (score - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+      const c = stops[i-1][1].map((v,j) => Math.round(v + t*(stops[i][1][j]-v)));
+      return `rgb(${c[0]},${c[1]},${c[2]})`;
+    }
+  }
+  return 'rgb(204,0,0)';
+}
+
+function scoreToHeatWeight(score) {
+  return score / 100;
+}
+
+function clearMapLayers() {
+  if (mapHeatLayer) { map.removeLayer(mapHeatLayer); mapHeatLayer = null; }
+  if (mapCellLayer) { map.removeLayer(mapCellLayer); mapCellLayer = null; }
+}
+
+function renderHourLayer(hour) {
+  clearMapLayers();
+  if (gridData.length === 0) return;
+
+  const hKey = String(hour);
+  const heatPts = [];
+  const features = [];
+
+  for (const pt of gridData) {
+    const h = pt.hours[hKey];
+    if (!h) continue;
+
+    if (h.score > 0) {
+      heatPts.push([pt.lat, pt.lon, scoreToHeatWeight(h.score)]);
+    }
+
+    // GeoJSON rectangle cell for click detection
+    const dLat = 1.25, dLon = 1.5;
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[
+          [pt.lon-dLon, pt.lat-dLat], [pt.lon+dLon, pt.lat-dLat],
+          [pt.lon+dLon, pt.lat+dLat], [pt.lon-dLon, pt.lat+dLat],
+          [pt.lon-dLon, pt.lat-dLat],
+        ]],
+      },
+      properties: { lat: pt.lat, lon: pt.lon, hour: hKey, ...h },
+    });
+  }
+
+  // Heatmap layer (smooth colors)
+  mapHeatLayer = L.heatLayer(heatPts, {
+    radius: 55,
+    blur:   45,
+    maxZoom: 6,
+    max: 1.0,
+    gradient: { 0.0: 'transparent', 0.15: '#00aa44bb', 0.45: '#ffcc00bb', 0.7: '#ff6600cc', 1.0: '#cc0000ee' },
+  }).addTo(map);
+
+  // Invisible click layer
+  mapCellLayer = L.geoJSON({ type:'FeatureCollection', features }, {
+    style: { fillOpacity: 0, stroke: false },
+    onEachFeature(feature, layer) {
+      layer.on('click', () => showCellDetail(feature.properties));
+    },
+  }).addTo(map);
+}
+
+function showCellDetail(props) {
+  const el = document.getElementById('map-cell-detail');
+  const color = scoreToColor(props.score) || 'var(--muted)';
+  const hop   = props.best_duct?.hop_km;
+
+  const waterTag = props.over_water
+    ? `<div style="font-size:10px;color:#58c4f5;margin-bottom:6px;">&#127754; Over ${props.water_body}</div>`
+    : props.water_body
+      ? `<div style="font-size:10px;color:var(--muted);margin-bottom:6px;">Near ${props.water_body}</div>`
+      : '';
+
+  el.innerHTML = `
+    <h2>Selected Cell</h2>
+    <div style="font-size:22px;font-weight:700;color:${color};margin-bottom:4px;">${props.score}/100</div>
+    <div style="font-weight:600;margin-bottom:4px;">${RISK_LABELS[props.level] || props.level}</div>
+    ${waterTag}
+    <p style="font-size:11px;color:var(--muted);margin-bottom:8px;">${props.description}</p>
+    <table>
+      <tr><td style="color:var(--muted)">Location</td><td>${props.lat.toFixed(1)}°N ${Math.abs(props.lon).toFixed(1)}°W</td></tr>
+      <tr><td style="color:var(--muted)">n41 ducts</td><td>${props.n41_ducts}</td></tr>
+      ${hop ? `<tr><td style="color:var(--muted)">Max hop</td><td>~${hop} km</td></tr>` : ''}
+    </table>
+    <button onclick="analyzeCell(${props.lat},${props.lon})" style="margin-top:10px;width:100%;" class="btn-ghost">
+      Full Analysis
+    </button>`;
+}
+
+async function analyzeCell(lat, lon) {
+  currentLat = lat;
+  currentLon = lon;
+  setMode('site');
+  await fetchCurrent();
+}
+
+// Hour selector buttons
+document.getElementById('hour-btns').addEventListener('click', e => {
+  const btn = e.target.closest('.hour-btn');
+  if (!btn) return;
+  document.querySelectorAll('.hour-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedMapHour = parseInt(btn.dataset.h);
+  renderHourLayer(selectedMapHour);
+});
+
+
+// ── SSE map loader ─────────────────────────────────────────────────────────────
+function loadMapView() {
+  if (mapEventSource) mapEventSource.close();
+
+  gridData = [];
+  clearMapLayers();
+  setProgress(0);
+  document.getElementById('map-status').textContent = 'Fetching NOAA GFS grid...';
+
+  mapEventSource = new EventSource('/api/map/stream');
+
+  mapEventSource.onmessage = e => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'start') {
+      setStatus(`Loading CONUS grid: ${msg.total} points...`);
+    } else if (msg.type === 'point') {
+      gridData.push(msg.data);
+      setProgress(msg.progress / msg.total);
+
+      // Add heat point immediately for live fill-in effect
+      const hKey  = String(selectedMapHour);
+      const h     = msg.data.hours[hKey];
+      if (h && h.score > 0 && mapHeatLayer) {
+        mapHeatLayer.addLatLng([msg.data.lat, msg.data.lon, scoreToHeatWeight(h.score)]);
+      } else if (h && h.score > 0 && !mapHeatLayer) {
+        // Bootstrap heatmap on first point
+        mapHeatLayer = L.heatLayer([[msg.data.lat, msg.data.lon, scoreToHeatWeight(h.score)]], {
+          radius:55, blur:45, maxZoom:6, max:1.0,
+          gradient: { 0.0: 'transparent', 0.15: '#00aa44bb', 0.45: '#ffcc00bb', 0.7: '#ff6600cc', 1.0: '#cc0000ee' },
+        }).addTo(map);
+      }
+
+      document.getElementById('map-status').textContent =
+        `Loading: ${msg.progress}/${msg.total} points`;
+
+    } else if (msg.type === 'done') {
+      mapEventSource.close();
+      setProgress(1);
+      setTimeout(() => setProgress(-1), 600);   // hide bar
+      document.getElementById('map-status').textContent =
+        `${gridData.length} points loaded. Click a cell for details.`;
+      setStatus(`CONUS map loaded — ${gridData.length} grid points, all forecast hours.`);
+      // Re-render full layer with click targets
+      renderHourLayer(selectedMapHour);
+    }
+  };
+
+  mapEventSource.onerror = () => {
+    mapEventSource.close();
+    setProgress(-1);
+    document.getElementById('map-status').textContent = 'Error loading map. Retry by switching modes.';
+    showError('Map grid fetch failed. Check server logs.');
+  };
+}
+
+
+// ── Site analysis ─────────────────────────────────────────────────────────────
+function updateSiteMarker(lat, lon, hopKm) {
+  if (siteMarker) map.removeLayer(siteMarker);
+  if (ductCircle) { map.removeLayer(ductCircle); ductCircle = null; }
+
+  siteMarker = L.circleMarker([lat, lon], {
+    radius:8, color:'#58a6ff', fillColor:'#58a6ff', fillOpacity:.9, weight:2,
+  }).addTo(map).bindPopup(`<b>Site: KD9WXY</b><br>${lat.toFixed(3)}, ${lon.toFixed(3)}`);
+
+  if (hopKm > 0) {
+    ductCircle = L.circle([lat, lon], {
+      radius: hopKm * 1000,
+      color:'#f85149', fillColor:'#f85149', fillOpacity:.05, weight:2, dashArray:'6 4',
+    }).addTo(map).bindPopup(`Max single hop: ${hopKm.toFixed(0)} km`);
+  }
+}
+
+function updateRiskCard(risk) {
+  document.getElementById('risk-card').className  = `risk-card risk-${risk.level}`;
+  const sc = document.getElementById('risk-score');
+  sc.className  = `risk-score score-${risk.level}`;
+  sc.textContent = risk.score;
+  document.getElementById('risk-level').textContent = RISK_LABELS[risk.level] || risk.level;
+  document.getElementById('risk-desc').textContent  = risk.description;
+}
+
+function updateDuctBadges(ducts) {
+  document.getElementById('duct-badges').innerHTML = (ducts||[]).map(d =>
+    `<span class="duct-badge"><span class="dot dot-${d.type}"></span>${d.type} ${d.base_m.toFixed(0)}-${d.top_m.toFixed(0)}m dM=${d.delta_M}${d.traps_n41?' ⚡n41':''}</span>`
+  ).join('');
+}
+
+function updateMProfile(profile) {
+  if (!mProfileChart) initMProfileChart();
+  const maxH = 5000;
+  const pts = profile.filter(lv => lv.height_m <= maxH);
+  const colors = pts.map(lv => {
+    if (lv.gradient_class === 'ducting')          return '#f85149';
+    if (lv.gradient_class === 'super-refractive') return '#f0883e';
+    if (lv.gradient_class === 'sub-refractive')   return '#8b949e';
+    return '#58a6ff';
+  });
+  mProfileChart.data.datasets = [{
+    data: pts.map(lv => ({ x: lv.M, y: lv.height_m })),
+    borderColor:'#58a6ff', backgroundColor:'transparent',
+    pointBackgroundColor: colors, pointRadius:3, tension:.2, fill:false,
+  }];
+  mProfileChart.options.scales.y.max = maxH;
+  mProfileChart.update();
+}
+
+function updateTimeline(timeline) {
+  if (!timelineChart) initTimelineChart();
+  document.getElementById('timeline-hint').style.display = 'none';
+  timelineChart.data.labels = timeline.map(t => `+${t.fcst_hours}h`);
+  timelineChart.data.datasets[0].data = timeline.map(t => t.risk.score);
+  timelineChart.data.datasets[0].backgroundColor = timeline.map(t => RISK_COLORS[t.risk.level]||'#30363d');
+  timelineChart.update();
+}
+
+function updateDuctTable(ducts) {
+  const el = document.getElementById('duct-table-wrap');
+  if (!ducts?.length) { el.innerHTML = '<p style="color:var(--muted);font-size:12px;">None detected.</p>'; return; }
+  el.innerHTML = `<table><thead><tr><th>Type</th><th>Layer</th><th>Thick.</th><th>dM</th><th>Class</th><th>n41</th><th>Hop</th></tr></thead><tbody>
+    ${ducts.map(d=>`<tr>
+      <td>${d.type}</td>
+      <td>${d.base_m.toFixed(0)}-${d.top_m.toFixed(0)}m</td>
+      <td>${d.thickness_m}m</td>
+      <td>${d.delta_M}</td>
+      <td><span class="tag tag-${d.gradient_class==='ducting'?'ducting':'super'}">${d.gradient_class}</span></td>
+      <td>${d.traps_n41?'<span class="tag tag-ducting">YES</span>':'No'}</td>
+      <td>${d.max_hop_km>0?d.max_hop_km+'km':'—'}</td>
+    </tr>`).join('')}
+  </tbody></table>`;
+}
+
+function updateSoundingSummary(data) {
+  const gs = data.gradient_summary || {};
+  const el = document.getElementById('sounding-summary');
+  el.innerHTML = `<table><tbody>
+    <tr><td style="color:var(--muted)">Source</td><td>${data.source||'GFS'}</td></tr>
+    <tr><td style="color:var(--muted)">Valid</td><td style="font-size:10px">${data.valid_time||'—'}</td></tr>
+    <tr><td style="color:var(--muted)">Surface N</td><td>${data.surface_N??'—'} N-units</td></tr>
+    <tr><td style="color:var(--muted)">Normal layers</td><td>${gs.normal||0}</td></tr>
+    <tr><td style="color:var(--muted)">Super-refractive</td><td>${gs['super-refractive']||0}</td></tr>
+    <tr><td style="color:var(--muted)">Ducting layers</td><td style="color:${gs.ducting?'var(--red)':'inherit'}">${gs.ducting||0}</td></tr>
+    ${data.risk?.path_advantage_dB?`<tr><td style="color:var(--muted)">Path advantage</td><td>${data.risk.path_advantage_dB} dB</td></tr>`:''}
+  </tbody></table>`;
+}
+
+
+// ── Water body context ────────────────────────────────────────────────────────
+function updateWaterContext(wc) {
+  const panel = document.getElementById('water-context-panel');
+  const detail = document.getElementById('water-context-detail');
+
+  if (!wc || (!wc.water_body && !wc.over_water)) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = '';
+  const multiplierPct = wc.score_multiplier ? Math.round((wc.score_multiplier - 1) * 100) : 0;
+  const badge = wc.over_water
+    ? `<span class="water-badge">&#127754; Over ${wc.water_body}</span>`
+    : `<span class="water-badge-land">&#127960; ${wc.proximity_km?.toFixed(0)} km from ${wc.water_body}</span>`;
+
+  let rows = `
+    <div style="margin-bottom:6px;">${badge}</div>
+    <table><tbody>
+      <tr><td style="color:var(--muted)">Status</td><td>${wc.over_water ? 'Over open water' : 'Coastal zone'}</td></tr>
+      ${wc.evap_duct ? '<tr><td style="color:var(--muted)">Evap. duct</td><td style="color:#58c4f5">Injected (GFS unresolved)</td></tr>' : ''}
+      ${multiplierPct > 0 ? `<tr><td style="color:var(--muted)">Score boost</td><td style="color:var(--yellow)">+${multiplierPct}%</td></tr>` : ''}
+    </tbody></table>`;
+
+  if (wc.enhancement_reason) {
+    rows += `<p style="margin-top:6px;font-size:10px;color:var(--muted);line-height:1.5;">${wc.enhancement_reason}</p>`;
+  }
+
+  detail.innerHTML = rows;
+}
+
+
+// ── Fetch helpers ─────────────────────────────────────────────────────────────
+function setBusy(busy) {
+  ['btn-forecast','btn-current','btn-geocode'].forEach(id => {
+    document.getElementById(id).disabled = busy;
+  });
+  document.getElementById('btn-forecast').textContent = busy ? 'Loading…' : '48hr';
+}
+
+async function fetchCurrent() {
+  if (!currentLat) { showError('Search a location first.'); return; }
+  clearError();
+  setBusy(true);
+  try {
+    const r = await fetch(`/api/current?lat=${currentLat}&lon=${currentLon}`);
+    if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
+    const d = await r.json();
+    updateRiskCard(d.risk);
+    updateDuctBadges(d.ducts);
+    updateMProfile(d.profile);
+    updateDuctTable(d.ducts);
+    updateSoundingSummary(d);
+    updateWaterContext(d.water_context);
+    updateSiteMarker(currentLat, currentLon, d.risk?.best_duct?.hop_km || 0);
+    setStatus(`Analysis: ${new Date().toLocaleTimeString()} — ${d.valid_time||''}`);
+  } catch(e) { showError(e.message); }
+  finally { setBusy(false); }
+}
+
+async function fetchForecast() {
+  if (!currentLat) { showError('Search a location first.'); return; }
+  clearError();
+  setBusy(true);
+  document.getElementById('timeline-hint').textContent = 'Fetching 48hr GFS forecast…';
+  document.getElementById('timeline-hint').style.display = 'block';
+  try {
+    const r = await fetch(`/api/forecast?lat=${currentLat}&lon=${currentLon}`);
+    if (!r.ok) throw new Error((await r.json()).detail || `HTTP ${r.status}`);
+    const d = await r.json();
+    const cur = d.timeline?.[0];
+    if (cur) {
+      updateRiskCard(cur.risk);
+      updateDuctBadges(cur.ducts);
+      updateMProfile(cur.profile);
+      updateDuctTable(cur.ducts);
+      updateSoundingSummary(cur);
+      updateWaterContext(cur.water_context);
+      updateSiteMarker(currentLat, currentLon, cur.risk?.best_duct?.hop_km || 0);
+    }
+    updateTimeline(d.timeline);
+    setStatus(`Forecast loaded — peak: ${d.peak_risk?.level} at +${d.peak_risk?.fcst_hours}h`);
+  } catch(e) { showError(e.message); }
+  finally { setBusy(false); }
+}
+
+document.getElementById('btn-forecast').addEventListener('click', fetchForecast);
+document.getElementById('btn-current').addEventListener('click', fetchCurrent);
+
+
+// ── Chart init ────────────────────────────────────────────────────────────────
+function initMProfileChart() {
+  const ctx = document.getElementById('chart-mprofile').getContext('2d');
+  mProfileChart = new Chart(ctx, {
+    type:'line',
+    data:{ datasets:[] },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>`M=${c.parsed.x.toFixed(1)}, h=${c.parsed.y.toFixed(0)}m`}}},
+      scales:{
+        x:{ title:{display:true,text:'M (M-units)',color:'#8b949e'}, grid:{color:'#21262d'}, ticks:{color:'#8b949e'} },
+        y:{ title:{display:true,text:'Height (m)',color:'#8b949e'}, grid:{color:'#21262d'}, ticks:{color:'#8b949e'}, min:0, max:5000 },
+      },
+    },
+  });
+}
+
+function initTimelineChart() {
+  const ctx = document.getElementById('chart-timeline').getContext('2d');
+  timelineChart = new Chart(ctx, {
+    type:'bar',
+    data:{ labels:[], datasets:[{label:'Risk Score',data:[],backgroundColor:[],borderRadius:3}] },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ grid:{color:'#21262d'}, ticks:{color:'#8b949e', font:{size:10}} },
+        y:{ min:0, max:100, grid:{color:'#21262d'}, ticks:{color:'#8b949e'}, title:{display:true,text:'Risk 0-100',color:'#8b949e',font:{size:10}} },
+      },
+    },
+  });
+}
+
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+function setProgress(frac) {
+  const wrap = document.getElementById('progress-bar-wrap');
+  const bar  = document.getElementById('progress-bar');
+  if (frac < 0) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  bar.style.width = `${Math.round(frac * 100)}%`;
+}
+
+function setStatus(msg) {
+  document.getElementById('status-msg').textContent = msg;
+  document.getElementById('status-time').textContent = new Date().toLocaleTimeString();
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-msg');
+  el.style.display = 'block';
+  el.textContent   = 'Error: ' + msg;
+}
+
+function clearError() {
+  document.getElementById('error-msg').style.display = 'none';
+}
+
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+initMProfileChart();
+initTimelineChart();
+
+// Auto-geocode the default location
+handleSearch();
+</script>
+</body>
+</html>
