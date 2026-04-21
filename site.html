@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KD9WXY — Tropospheric Ducting Forecast</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--panel:#161b22;--border:#30363d;
+  --accent:#58a6ff;--green:#3fb950;--yellow:#d29922;--orange:#f0883e;--red:#f85149;
+  --text:#c9d1d9;--muted:#8b949e;--ham:#f97316;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Header ── */
+header{background:var(--panel);border-bottom:1px solid var(--border);padding:7px 14px;display:flex;align-items:center;gap:10px;flex-shrink:0;flex-wrap:nowrap}
+.callsign{font-size:17px;font-weight:700;color:var(--ham);letter-spacing:.05em;white-space:nowrap;line-height:1.2}
+.callsign small{display:block;font-size:10px;font-weight:400;color:var(--muted)}
+.htitle{color:var(--accent);font-size:13px;font-weight:600;white-space:nowrap}
+.hsub{color:var(--muted);font-size:10px}
+.mode-row{display:flex;gap:4px}
+
+/* ── Autocomplete search ── */
+#search-wrap{display:flex;gap:5px;align-items:center;flex:1;min-width:0}
+#ac-wrap{position:relative;flex:1;min-width:0}
+#loc-input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:5px 9px;font-size:12px}
+#loc-input:focus{outline:none;border-color:var(--accent)}
+#ac-list{position:absolute;top:calc(100% + 3px);left:0;right:0;background:var(--panel);border:1px solid var(--border);border-radius:5px;z-index:9100;max-height:220px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+.ac-item{padding:7px 11px;font-size:12px;cursor:pointer;border-bottom:1px solid #21262d55;line-height:1.3}
+.ac-item:last-child{border-bottom:none}
+.ac-item:hover,.ac-item.ac-on{background:#1c2128;color:var(--accent)}
+.ac-sub{font-size:10px;color:var(--muted);margin-top:1px}
+
+/* ── Time bar ── */
+.timebar{background:#0a0f16;border-bottom:1px solid var(--border);padding:5px 14px;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap}
+.timebar label{color:var(--muted);font-size:11px;white-space:nowrap}
+.timebar input[type=date]{background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:3px 7px;font-size:12px;cursor:pointer}
+.timebar input[type=date]:focus{outline:none;border-color:var(--accent)}
+.timebar select{background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:3px 7px;font-size:12px;cursor:pointer}
+.day-nav{display:flex;gap:2px}
+.day-nav button{background:var(--bg);border:1px solid var(--border);color:var(--muted);font-size:13px;padding:2px 7px;border-radius:4px}
+.day-nav button:hover{border-color:var(--accent);color:var(--accent)}
+.mode-badge{display:inline-flex;align-items:center;gap:5px;border-radius:100px;padding:2px 9px;font-size:10px;font-weight:600}
+.badge-live{background:#122d1c;border:1px solid #3fb95066;color:var(--green)}
+.badge-hist{background:#2d2203;border:1px solid #d2992266;color:var(--yellow)}
+.badge-fc  {background:#1c2340;border:1px solid #58a6ff66;color:var(--accent)}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Buttons ── */
+button{background:var(--accent);border:none;border-radius:5px;color:#000;cursor:pointer;font-size:11px;font-weight:600;padding:5px 10px;white-space:nowrap;transition:opacity .15s}
+button:hover{opacity:.85}
+button:disabled{opacity:.4;cursor:not-allowed}
+.btn-ghost{background:var(--panel);border:1px solid var(--border);color:var(--text)}
+.btn-ham{background:var(--ham);color:#000}
+
+/* ── Progress ── */
+#pgbar-wrap{height:3px;background:var(--border);flex-shrink:0;display:none}
+#pgbar{height:100%;background:var(--ham);transition:width .15s;width:0}
+
+/* ── Layout ── */
+.main{flex:1;display:grid;grid-template-columns:1fr 350px;min-height:0}
+#map{background:#111}
+.rcol{display:flex;flex-direction:column;border-left:1px solid var(--border);min-height:0;overflow:hidden}
+
+/* ── Panels ── */
+.panel{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 13px;flex-shrink:0}
+.panel h2{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:8px}
+.scroll-panel{overflow-y:auto;flex:1}
+
+/* ── Risk card ── */
+.risk-card{border-radius:7px;padding:9px 13px;display:flex;align-items:center;gap:12px;margin-bottom:7px}
+.risk-none   {background:#1c2128;border:1px solid var(--border)}
+.risk-low    {background:#122d1c;border:1px solid #2ea04388}
+.risk-moderate{background:#2d2203;border:1px solid #d2992288}
+.risk-high   {background:#2d1800;border:1px solid #f0883e88}
+.risk-severe {background:#2d0a0a;border:1px solid #f8514988}
+.rscore{font-size:28px;font-weight:700;min-width:40px;text-align:center;line-height:1}
+.sc-none{color:var(--muted)}.sc-low{color:var(--green)}.sc-moderate{color:var(--yellow)}.sc-high{color:var(--orange)}.sc-severe{color:var(--red)}
+.rinfo h3{font-size:12px;font-weight:600;margin-bottom:3px}
+.rinfo p{font-size:11px;color:var(--muted);line-height:1.4}
+
+/* ── Charts ── */
+.ch-wrap{position:relative;height:155px}
+.ch-wrap-sm{position:relative;height:110px}
+
+/* ── Tables ── */
+table{width:100%;border-collapse:collapse;font-size:11px}
+th{color:var(--muted);text-align:left;padding:2px 5px;border-bottom:1px solid var(--border);font-weight:500}
+td{padding:2px 5px;border-bottom:1px solid #21262d33}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block;border-radius:3px;padding:1px 4px;font-size:10px;font-weight:600}
+.tag-d{background:#2d0a0a;color:var(--red)}.tag-s{background:#2d1800;color:var(--orange)}.tag-n{background:#122d1c;color:var(--green)}
+
+/* ── Map panels ── */
+.hour-btns{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px}
+.hbtn{font-size:11px;padding:3px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer}
+.hbtn:hover{border-color:var(--accent);color:var(--accent)}
+.hbtn.active{background:var(--ham);border-color:var(--ham);color:#000;font-weight:700}
+.legend-bar{height:12px;border-radius:3px;background:linear-gradient(to right,#00aa44,#88cc00,#ffcc00,#ff6600,#cc0000);margin-bottom:3px}
+.legend-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--muted)}
+
+/* ── Physics blocks ── */
+.phys-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}
+.eq{background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:7px 10px}
+.eq h4{font-size:10px;color:var(--accent);margin-bottom:3px}
+.eq code{font-family:"SFMono-Regular",Consolas,monospace;font-size:10px;color:var(--green);display:block;margin:1px 0}
+.eq p{font-size:9px;color:var(--muted);line-height:1.4;margin-top:2px}
+
+/* ── Badges ── */
+.duct-badge{display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:100px;padding:2px 8px;font-size:10px;margin:2px}
+.dot{width:5px;height:5px;border-radius:50%}
+.dot-surface{background:var(--accent)}.dot-elevated{background:var(--yellow)}
+
+/* ── Status ── */
+.statusbar{background:var(--panel);border-top:1px solid var(--border);padding:3px 14px;font-size:10px;color:var(--muted);display:flex;gap:14px;flex-shrink:0}
+.statusbar a{color:var(--accent);text-decoration:none}
+#errmsg{color:var(--red);background:#2d0a0a;border:1px solid #f8514944;border-radius:5px;padding:6px 12px;margin:6px;display:none;font-size:11px}
+
+/* Leaflet dark popup */
+.leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:5px}
+.leaflet-popup-tip{background:var(--panel)}
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="callsign">KD9WXY<small>Ham · 5G Engineer</small></div>
+  <div><div class="htitle">Tropospheric Ducting Forecast</div><div class="hsub">5G n41 (2496–2690 MHz) &nbsp;·&nbsp; NOAA GFS / ERA5 &nbsp;·&nbsp; ITU-R P.453</div></div>
+
+  <div id="search-wrap">
+    <div id="ac-wrap">
+      <input id="loc-input" type="text" placeholder="Green Bay, WI  or  44.52,−88.02" value="Green Bay, WI" autocomplete="off" spellcheck="false">
+      <div id="ac-list"></div>
+    </div>
+    <button id="btn-search">Search</button>
+  </div>
+
+  <div class="mode-row">
+    <button id="btn-site" class="btn-ham">Site</button>
+    <button id="btn-map" class="btn-ghost">Map</button>
+  </div>
+  <div id="site-btns" style="display:flex;gap:4px">
+    <button id="btn-load">Load</button>
+    <button id="btn-now" class="btn-ghost">Now</button>
+  </div>
+  <a href="index.html" style="text-decoration:none;padding:5px 10px;font-size:11px;font-weight:600;border:1px solid var(--border);border-radius:5px;color:var(--muted);white-space:nowrap;flex-shrink:0">← Loop</a>
+</header>
+
+<!-- ── Time control bar ── -->
+<div class="timebar">
+  <label>Date:</label>
+  <div class="day-nav">
+    <button id="btn-prev-day" title="Previous day">&lsaquo;</button>
+    <button id="btn-next-day" title="Next day">&rsaquo;</button>
+  </div>
+  <input type="date" id="date-pick">
+  <button id="btn-live" class="btn-ghost" style="font-size:10px;padding:3px 8px">Live</button>
+  <label id="hist-hour-label" style="display:none">Hour UTC:</label>
+  <select id="hist-hour" style="display:none">
+    <option value="0">00 UTC</option>
+    <option value="6">06 UTC</option>
+    <option value="12" selected>12 UTC</option>
+    <option value="18">18 UTC</option>
+  </select>
+  <span id="mode-badge" class="mode-badge badge-live"><span class="pulse"></span>Live · GFS 7-day</span>
+</div>
+
+<div id="pgbar-wrap"><div id="pgbar"></div></div>
+<div id="errmsg"></div>
+
+<!-- ── Main ── -->
+<div class="main">
+  <div id="map"></div>
+  <div class="rcol">
+
+    <!-- SITE panels -->
+    <div id="site-panels">
+      <div class="panel">
+        <h2>n41 Interference Risk</h2>
+        <div id="risk-card" class="risk-card risk-none">
+          <div class="rscore sc-none" id="rscore">—</div>
+          <div class="rinfo"><h3 id="rlevel">Awaiting Data</h3><p id="rdesc">Search a location and press Load.</p></div>
+        </div>
+        <div id="duct-badges"></div>
+      </div>
+      <div class="panel"><h2>Modified Refractivity M-Profile</h2><div class="ch-wrap"><canvas id="ch-mprofile"></canvas></div></div>
+      <div class="panel"><h2>Risk Timeline</h2><div class="ch-wrap-sm"><canvas id="ch-timeline"></canvas></div><div id="tl-hint" style="text-align:center;color:var(--muted);font-size:11px;padding:5px">Load data to see timeline.</div></div>
+      <div class="panel scroll-panel">
+        <h2>Detected Ducts</h2><div id="duct-tbl"><p style="color:var(--muted);font-size:11px">No data.</p></div>
+        <h2 style="margin-top:12px">Sounding Summary</h2><div id="snd-summary"><p style="color:var(--muted);font-size:11px">No data.</p></div>
+        <h2 style="margin-top:12px">Physics Reference</h2>
+        <div class="phys-grid">
+          <div class="eq"><h4>Refractivity N (ITU-R P.453)</h4><code>N = 77.6·P/T + 373246·e/T²</code><p>P=hPa, T=K, e=vapor pressure (hPa)</p></div>
+          <div class="eq"><h4>Modified Refractivity M</h4><code>M = N + (h/Re)·10⁶</code><p>Ducting: dM/dh &lt; 0 &hArr; dN/dh &lt; -157 N/km</p></div>
+          <div class="eq"><h4>Critical Frequency</h4><code>f_c = c/(2h·√(2|ΔN|·10⁻⁶))</code><p>n41 (2.5 GHz) needs h &gt; ~50 m duct</p></div>
+          <div class="eq"><h4>Max Hop Distance</h4><code>θ_c = √(2|ΔN|·10⁻⁶) rad</code><code>d = 2·h / θ_c  km</code><p>Ducted n41: 200–600+ km per hop</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAP panels -->
+    <div id="map-panels" style="display:none">
+      <div class="panel">
+        <h2>Map Hour</h2>
+        <div class="hour-btns" id="hour-btns"></div>
+        <div id="map-status" style="font-size:11px;color:var(--muted)">Switch to Map mode to load grid.</div>
+        <button id="btn-reload-map" class="btn-ghost" style="margin-top:7px;font-size:11px">Reload Map</button>
+      </div>
+      <div class="panel">
+        <h2>Risk Legend</h2>
+        <div class="legend-bar"></div>
+        <div class="legend-labels"><span>None</span><span>Low</span><span>Moderate</span><span>High</span><span>Severe</span></div>
+      </div>
+      <div class="panel scroll-panel" id="cell-detail">
+        <h2>Selected Cell</h2>
+        <p style="font-size:11px;color:var(--muted)">Click a cell on the map.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="statusbar">
+  <span>KD9WXY &nbsp;·&nbsp; <a href="https://open-meteo.com" target="_blank">NOAA GFS</a> forecast &amp; <a href="https://open-meteo.com" target="_blank">ERA5</a> archive via Open-Meteo (public domain)</span>
+  <span id="st-msg"></span>
+  <span id="st-time"></span>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PHYSICS ENGINE  (ITU-R P.453-14)
+═══════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+const RE_KM       = 6371.0;
+const N41_MHZ     = 2593.0;
+const DUCT_THRESH = -157.0;
+const STD_GRAD    = -40.0;
+
+function satVP(T_K){const Tc=T_K-273.15;return 6.1078*Math.exp(17.2694*Tc/(Tc+237.29))}
+function calcN(P,T,e){return 77.6*P/T+373246*e/(T*T)}
+function calcM(N,h_km){return N+(h_km/RE_KM)*1e6}
+function gradClass(g){if(g>0)return'sub-refractive';if(g>STD_GRAD)return'normal';if(g>DUCT_THRESH)return'super-refractive';return'ducting'}
+
+function computeProfile(pressures,heights,temps,dewpoints){
+  const lvs=pressures.map((P,i)=>{
+    const T=temps[i]+273.15,Td=dewpoints[i]+273.15,e=satVP(Td);
+    const N=calcN(P,T,e),M=calcM(N,heights[i]/1000);
+    return{pressure_hPa:P,height_m:heights[i],temp_C:temps[i],dewpoint_C:dewpoints[i],N:+N.toFixed(2),M:+M.toFixed(2)};
+  });
+  lvs.sort((a,b)=>a.height_m-b.height_m);
+  for(let i=1;i<lvs.length;i++){
+    const dh=(lvs[i].height_m-lvs[i-1].height_m)/1000;
+    if(dh>0){lvs[i].dN_dh=+((lvs[i].N-lvs[i-1].N)/dh).toFixed(1);lvs[i].dM_dh=+((lvs[i].M-lvs[i-1].M)/dh).toFixed(1);lvs[i].gradient_class=gradClass(lvs[i].dN_dh);}
+  }
+  if(lvs.length)lvs[0].gradient_class='surface';
+  return lvs;
+}
+
+function detectDucts(profile){
+  const ducts=[];let inDuct=false,bi=0,Mb=0,Mm=0;
+  for(let i=1;i<profile.length;i++){
+    const dM=profile[i].dM_dh;if(dM===undefined)continue;
+    if(!inDuct&&dM<0){inDuct=true;bi=i-1;Mb=profile[i-1].M;Mm=profile[i].M;}
+    else if(inDuct){
+      Mm=Math.min(Mm,profile[i].M);
+      if(profile[i].M>=Mb||(dM>5&&profile[i].M>Mm+2)){
+        const dv=Mb-Mm;if(dv>=0.5)ducts.push(_bduct(profile,bi,i,Mb,dv));inDuct=false;
+      }
+    }
+  }
+  if(inDuct){const dv=Mb-Mm;if(dv>=1)ducts.push(_bduct(profile,bi,profile.length-1,Mb,dv));}
+  return ducts;
+}
+
+function _bduct(profile,bi,ti,Mb,dM){
+  const bh=profile[bi].height_m,th=profile[ti].height_m,tm=th-bh;
+  const gs=profile.slice(bi+1,ti+1).filter(l=>l.dN_dh!==undefined).map(l=>l.dN_dh);
+  const mg=gs.length?gs.reduce((a,b)=>a+b,0)/gs.length:DUCT_THRESH;
+  const dN=Math.abs(mg)*(tm/1000);
+  let fc=Infinity,hop=0;
+  if(dN>0&&tm>0){const hz=(3e8/(2*tm))*Math.sqrt(1/(2*dN*1e-6));fc=hz/1e6;}
+  const tn41=fc<=N41_MHZ;
+  if(tn41&&dN>0){const tc=Math.sqrt(2*dN*1e-6);if(tc>0)hop=Math.round(2*(tm/1000)/tc);}
+  return{base_m:bh,top_m:th,thickness_m:tm,delta_M:+dM.toFixed(1),mean_dN_dh:+mg.toFixed(1),
+         duct_type:bh<200?'surface':'elevated',gradient_class:gradClass(mg),traps_n41:tn41,critical_f_MHz:Math.round(fc),max_hop_km:hop};
+}
+
+function interferenceRisk(ducts,profile){
+  const srProxy=profile?((()=>{
+    const srLayers=profile.filter(l=>l.dN_dh!==undefined&&l.dN_dh<=STD_GRAD);
+    if(!srLayers.length)return 0;
+    const strongest=Math.min(...srLayers.map(l=>l.dN_dh));
+    if(strongest>STD_GRAD)return 0;
+    if(strongest>DUCT_THRESH)return Math.round((-strongest-40)/(157-40)*20);
+    return Math.min(30,Math.round(20+(-strongest-157)/50*10));
+  })())
+  :0;
+
+  if(!ducts.length){
+    if(srProxy>0){
+      const lvl=srProxy>=20?'moderate':srProxy>=10?'low':'low';
+      return{score:srProxy,level:lvl,
+             description:`Super-refractive gradient present. GFS resolution may be masking a shallow surface duct. Elevated n41 propagation possible.`,
+             n41_ducts:0,best_duct:null};
+    }
+    return{score:0,level:'none',description:'No ducting detected. Standard propagation.',n41_ducts:0,best_duct:null};
+  }
+  const n41=ducts.filter(d=>d.traps_n41);
+  if(!n41.length){
+    const s=Math.max(5,srProxy);
+    return{score:s,level:'low',description:`${ducts.length} duct(s) present but below n41 trapping threshold. Super-refractive enhancement likely.`,n41_ducts:0,best_duct:null};
+  }
+  const best=n41.reduce((a,b)=>a.delta_M>b.delta_M?a:b);
+  const rawScore=Math.min(40,Math.round(best.delta_M*4))+Math.min(30,Math.round(best.max_hop_km/15))+(best.duct_type==='surface'?20:10);
+  const score=Math.min(100,rawScore+Math.round(srProxy*0.3));
+  const level=score>=80?'severe':score>=55?'high':score>=30?'moderate':'low';
+  const desc=`${best.duct_type[0].toUpperCase()+best.duct_type.slice(1)} duct `
+            +`${best.base_m.toFixed(0)}-${best.top_m.toFixed(0)} m, `
+            +`dM=${best.delta_M}, f_crit=${best.critical_f_MHz} MHz, `
+            +`max hop ~${best.max_hop_km} km (~${best.max_hop_km*10} km over 10 hops)`;
+  return{score,level,description:desc,n41_ducts:n41.length,best_duct:best,ducts};
+}
+
+function gradSummary(profile){
+  const c={'sub-refractive':0,normal:0,'super-refractive':0,ducting:0};
+  profile.forEach(l=>{if(l.gradient_class in c)c[l.gradient_class]++;});
+  return c;
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// DATA CLIENT  —  GFS forecast + ERA5 historical
+// ═══════════════════════════════════════════════════════════
+const OM_FCST  = 'https://api.open-meteo.com/v1/forecast';
+const OM_ARCH  = 'https://archive-api.open-meteo.com/v1/archive';
+const GEO_BASE = 'https://geocoding-api.open-meteo.com/v1/search';
+const PLEVELS  = [1000,975,950,925,900,850,800,750,700,600,500,400,300];
+
+const FC_HOURS   = [0,12,24,36,48,60,72,84,96,108,120,132,144,156,168];
+const HIST_HOURS = [0,6,12,18];
+const MAP_FC_HOURS   = [0,6,12,18,24,48,72,96,120,144,168];
+const MAP_HIST_HOURS = [0,6,12,18];
+
+function _omVars(){
+  const plev=PLEVELS.flatMap(lv=>[`temperature_${lv}hPa`,`dewpoint_${lv}hPa`,`geopotential_height_${lv}hPa`]).join(',');
+  return plev+',temperature_2m,dewpoint_2m,surface_pressure';
+}
+
+function todayStr(){return new Date().toISOString().split('T')[0]}
+function isHistorical(date){return date && date < todayStr()}
+
+async function fetchRawOM(lat,lon,date){
+  let url;
+  if(isHistorical(date)){
+    url=`${OM_ARCH}?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+       +`&start_date=${date}&end_date=${date}&hourly=${_omVars()}&timezone=UTC`;
+  } else {
+    url=`${OM_FCST}?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`
+       +`&hourly=${_omVars()}&models=gfs_seamless&forecast_days=7&timezone=UTC`;
+  }
+  const r=await fetch(url);
+  if(!r.ok)throw new Error(`Open-Meteo ${r.status}: ${await r.text().then(t=>t.slice(0,120))}`);
+  const json=await r.json();
+  return{hourly:json.hourly, elevation:json.elevation??0};
+}
+
+function extractLevels(hourly,h,elev_m){
+  const levels=PLEVELS.map(lv=>{
+    const T=hourly[`temperature_${lv}hPa`]?.[h];
+    const Td=hourly[`dewpoint_${lv}hPa`]?.[h];
+    const H=hourly[`geopotential_height_${lv}hPa`]?.[h];
+    if(T==null||Td==null||H==null)return null;
+    if(T<-90||T>60)return null;
+    return{pressure_hPa:lv,height_m:H,temp_C:T,dewpoint_C:(Td<-90?T-25:Td)};
+  }).filter(Boolean);
+  const T2=hourly['temperature_2m']?.[h];
+  const Td2=hourly['dewpoint_2m']?.[h];
+  const Ps=hourly['surface_pressure']?.[h];
+  if(T2!=null&&Td2!=null&&Ps!=null&&T2>-90&&T2<60){
+    const surf={pressure_hPa:Ps,height_m:(elev_m??0)+2,temp_C:T2,dewpoint_C:(Td2<-90?T2-25:Td2)};
+    const filtered=levels.filter(l=>l.height_m>surf.height_m+5);
+    return[surf,...filtered];
+  }
+  return levels;
+}
+
+async function fetchSoundings(lat,lon,date){
+  const{hourly,elevation}=await fetchRawOM(lat,lon,date);
+  const hours=isHistorical(date)?HIST_HOURS:FC_HOURS;
+  const src=isHistorical(date)?`ERA5 Archive (${date})`:'NOAA GFS via Open-Meteo';
+  return hours.map(h=>{
+    const levels=extractLevels(hourly,h,elevation);
+    return{fcst_hours:h,valid_time:(hourly.time||[])[h]||null,levels,source:src,lat,lon,elevation};
+  }).filter(s=>s.levels.length>=4);
+}
+
+function analyseSounding(s){
+  const profile=computeProfile(s.levels.map(l=>l.pressure_hPa),s.levels.map(l=>l.height_m),
+                                s.levels.map(l=>l.temp_C),s.levels.map(l=>l.dewpoint_C));
+  const ducts=detectDucts(profile);
+  const risk=interferenceRisk(ducts,profile);
+  return{...s,profile,ducts:risk.ducts||[],risk,gradient_summary:gradSummary(profile),
+         surface_N:profile.length?+profile[0].N.toFixed(1):null};
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// GEOCODER
+// ═══════════════════════════════════════════════════════════
+const US_STATES={AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',DC:'District of Columbia'};
+
+async function geocode(q){
+  q=q.trim();
+  const ll=q.match(/^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$/);
+  if(ll)return{lat:+ll[1],lon:+ll[2],label:q};
+  const parts=q.split(',').map(s=>s.trim());
+  const city=parts[0],stateHint=parts[1]?.toUpperCase();
+  const stateFull=US_STATES[stateHint]||stateHint;
+  const r=await fetch(`${GEO_BASE}?name=${encodeURIComponent(city)}&count=10&language=en&format=json`);
+  const data=await r.json();
+  let results=data.results||[];
+  if(stateFull&&results.length){const f=results.filter(x=>(x.admin1||'').toLowerCase().includes(stateFull.toLowerCase()));if(f.length)results=f;}
+  if(!results.length)throw new Error(`Location not found: ${q}`);
+  const h=results[0];
+  return{lat:h.latitude,lon:h.longitude,label:[h.name,h.admin1,h.country_code].filter(Boolean).join(', ')};
+}
+
+async function fetchSuggestions(q){
+  try{
+    const r=await fetch(`${GEO_BASE}?name=${encodeURIComponent(q)}&count=6&language=en&format=json`);
+    const data=await r.json();
+    return data.results||[];
+  }catch{return[];}
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// CONUS MAP GRID  (2.5° × 3°, 231 points)
+// ═══════════════════════════════════════════════════════════
+const GRID_LATS=Array.from({length:11},(_,i)=>+(25+i*2.5).toFixed(1));
+const GRID_LONS=Array.from({length:21},(_,i)=>+(-125+i*3).toFixed(1));
+const GRID_PTS =GRID_LATS.flatMap(lat=>GRID_LONS.map(lon=>[lat,lon]));
+
+function cacheKey(date){return`kd9wxy_grid_v3_${date||'forecast'}`}
+const CACHE_TTL=30*60*1000;
+
+function loadCache(date){
+  try{const raw=sessionStorage.getItem(cacheKey(date));if(!raw)return null;
+    const{ts,data}=JSON.parse(raw);if(Date.now()-ts>CACHE_TTL)return null;return data;}
+  catch{return null;}
+}
+function saveCache(date,data){
+  try{sessionStorage.setItem(cacheKey(date),JSON.stringify({ts:Date.now(),data}));}catch{}
+}
+
+async function _analysePoint(lat,lon,date){
+  try{
+    const{hourly,elevation}=await fetchRawOM(lat,lon,date);
+    const hours=isHistorical(date)?MAP_HIST_HOURS:MAP_FC_HOURS;
+    const hoursData={};
+    for(const h of hours){
+      const levels=extractLevels(hourly,h,elevation);
+      if(levels.length<4)continue;
+      const profile=computeProfile(levels.map(l=>l.pressure_hPa),levels.map(l=>l.height_m),
+                                    levels.map(l=>l.temp_C),levels.map(l=>l.dewpoint_C));
+      const risk=interferenceRisk(detectDucts(profile),profile);
+      hoursData[String(h)]={score:risk.score,level:risk.level,description:risk.description,
+                             n41_ducts:risk.n41_ducts,best_duct:risk.best_duct};
+    }
+    return Object.keys(hoursData).length?{lat,lon,hours:hoursData}:null;
+  }catch{return null;}
+}
+
+async function loadCONUSMap(date,onPoint){
+  const cached=loadCache(date);
+  if(cached){cached.forEach((pt,i)=>onPoint(pt,i+1,cached.length,true));return cached;}
+  const results=[];const BATCH=15;let done=0;const total=GRID_PTS.length;
+  for(let i=0;i<GRID_PTS.length;i+=BATCH){
+    const batch=GRID_PTS.slice(i,i+BATCH);
+    const br=await Promise.all(batch.map(([lat,lon])=>
+      _analysePoint(lat,lon,date).then(r=>{done++;onPoint(r,done,total,false);return r;})
+    ));
+    br.forEach(r=>{if(r)results.push(r);});
+  }
+  saveCache(date,results);return results;
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// UI STATE
+// ═══════════════════════════════════════════════════════════
+const RISK_COLORS={none:'#30363d',low:'#3fb950',moderate:'#d29922',high:'#f0883e',severe:'#f85149'};
+const RISK_LABELS={none:'No Ducting',low:'Low Risk',moderate:'Moderate Risk',high:'High Risk',severe:'Severe Risk'};
+
+let curLat=44.519,curLon=-88.020;
+let mode='site';
+let selectedDate=null;
+let mapHour=0;
+let gridData=[];
+let mapLoadRunning=false;
+
+let siteMarker=null,ductCircle=null;
+let heatLayer=null,cellLayer=null;
+let chartM=null,chartTL=null;
+
+
+// ── Date / time bar ───────────────────────────────────────────────────────────
+function getDateMax(){const d=new Date();d.setDate(d.getDate()+6);return d.toISOString().split('T')[0]}
+function getDateMin(){return'1979-01-01';}
+
+function initDatePicker(){
+  const dp=document.getElementById('date-pick');
+  dp.min=getDateMin();dp.max=getDateMax();dp.value='';
+}
+
+function setDateMode(date){
+  selectedDate=date||null;
+  const dp=document.getElementById('date-pick');
+  dp.value=date||'';
+  const hist=isHistorical(date);
+  document.getElementById('hist-hour-label').style.display=hist?'':'none';
+  document.getElementById('hist-hour').style.display=hist?'':'none';
+  const badge=document.getElementById('mode-badge');
+  if(!date){
+    badge.className='mode-badge badge-live';
+    badge.innerHTML='<span class="pulse"></span>Live &nbsp;·&nbsp; GFS 7-day';
+  } else if(hist){
+    badge.className='mode-badge badge-hist';
+    badge.textContent=`ERA5 Archive: ${date}`;
+  } else {
+    badge.className='mode-badge badge-fc';
+    badge.textContent=`GFS Forecast: ${date}`;
+  }
+  rebuildMapHourBtns();
+  document.getElementById('btn-load').textContent=hist?'Load Day':'Forecast';
+}
+
+function rebuildMapHourBtns(){
+  const hist=isHistorical(selectedDate);
+  const hours=hist?MAP_HIST_HOURS:MAP_FC_HOURS;
+  const labels=hist
+    ?['00 UTC','06 UTC','12 UTC','18 UTC']
+    :['Now','+6h','+12h','+18h','+24h','+48h','+72h','+96h','+120h','+144h','+168h'];
+  document.getElementById('hour-btns').innerHTML=hours.map((h,i)=>
+    `<button class="hbtn${h===mapHour?' active':''}" data-h="${h}">${labels[i]}</button>`
+  ).join('');
+}
+
+document.getElementById('date-pick').addEventListener('change',e=>setDateMode(e.target.value||null));
+document.getElementById('btn-live').addEventListener('click',()=>setDateMode(null));
+document.getElementById('btn-prev-day').addEventListener('click',()=>{
+  const cur=selectedDate||todayStr();
+  const d=new Date(cur);d.setDate(d.getDate()-1);
+  const nd=d.toISOString().split('T')[0];
+  if(nd>=getDateMin())setDateMode(nd);
+});
+document.getElementById('btn-next-day').addEventListener('click',()=>{
+  const cur=selectedDate||todayStr();
+  const d=new Date(cur);d.setDate(d.getDate()+1);
+  const nd=d.toISOString().split('T')[0];
+  if(nd<=getDateMax())setDateMode(nd);
+});
+
+
+// ── Leaflet map ───────────────────────────────────────────────────────────────
+const lmap=L.map('map',{zoomControl:true,preferCanvas:true}).setView([39,-96],4);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  attribution:'&copy; OpenStreetMap &copy; CARTO',maxZoom:19
+}).addTo(lmap);
+
+lmap.on('click',e=>{
+  if(mode==='site'){
+    curLat=+e.latlng.lat.toFixed(4);
+    curLon=+e.latlng.lng.toFixed(4);
+    document.getElementById('loc-input').value=`${curLat}, ${curLon}`;
+    closeAC();
+    doLoad();
+  }
+});
+
+
+// ── Score → colour ────────────────────────────────────────────────────────────
+function scoreColor(s){
+  if(s<=0)return null;
+  const stops=[[0,[0,170,68]],[25,[136,204,0]],[50,[255,204,0]],[75,[255,102,0]],[100,[204,0,0]]];
+  for(let i=1;i<stops.length;i++){
+    if(s<=stops[i][0]){const t=(s-stops[i-1][0])/(stops[i][0]-stops[i-1][0]);
+      const c=stops[i-1][1].map((v,j)=>Math.round(v+t*(stops[i][1][j]-v)));return`rgb(${c[0]},${c[1]},${c[2]})`;}
+  }return'rgb(204,0,0)';
+}
+
+
+// ── Map layers ────────────────────────────────────────────────────────────────
+function clearMapLayers(){
+  if(heatLayer){lmap.removeLayer(heatLayer);heatLayer=null;}
+  if(cellLayer){lmap.removeLayer(cellLayer);cellLayer=null;}
+}
+
+function renderHour(hour){
+  clearMapLayers();if(!gridData.length)return;
+  const hKey=String(hour);const hPts=[];const feats=[];
+  for(const pt of gridData){
+    const h=pt.hours[hKey];if(!h)continue;
+    if(h.score>0)hPts.push([pt.lat,pt.lon,h.score/100]);
+    const dLat=1.25,dLon=1.5;
+    feats.push({type:'Feature',
+      geometry:{type:'Polygon',coordinates:[[[pt.lon-dLon,pt.lat-dLat],[pt.lon+dLon,pt.lat-dLat],[pt.lon+dLon,pt.lat+dLat],[pt.lon-dLon,pt.lat+dLat],[pt.lon-dLon,pt.lat-dLat]]]},
+      properties:{lat:pt.lat,lon:pt.lon,hKey,...h}});
+  }
+  heatLayer=L.heatLayer(hPts,{radius:55,blur:45,maxZoom:6,max:1.0,
+    gradient:{0.0:'transparent',0.15:'#00aa44bb',0.45:'#ffcc00bb',0.7:'#ff6600cc',1.0:'#cc0000ee'}}).addTo(lmap);
+  cellLayer=L.geoJSON({type:'FeatureCollection',features:feats},{
+    style:{fillOpacity:0,stroke:false},
+    onEachFeature(feat,layer){layer.on('click',()=>showCellDetail(feat.properties));}
+  }).addTo(lmap);
+}
+
+function showCellDetail(props){
+  const color=scoreColor(props.score)||'var(--muted)';
+  const hop=props.best_duct?.max_hop_km;
+  document.getElementById('cell-detail').innerHTML=`
+    <h2>Selected Cell</h2>
+    <div style="font-size:20px;font-weight:700;color:${color};margin-bottom:3px">${props.score}/100</div>
+    <div style="font-weight:600;margin-bottom:5px">${RISK_LABELS[props.level]||props.level}</div>
+    <p style="font-size:10px;color:var(--muted);margin-bottom:7px">${props.description}</p>
+    <table><tbody>
+      <tr><td style="color:var(--muted)">Location</td><td>${props.lat.toFixed(1)}N ${Math.abs(props.lon).toFixed(1)}W</td></tr>
+      <tr><td style="color:var(--muted)">n41 ducts</td><td>${props.n41_ducts}</td></tr>
+      ${hop?`<tr><td style="color:var(--muted)">Max hop</td><td>~${hop} km</td></tr>`:''}
+    </tbody></table>
+    <button onclick="drillCell(${props.lat},${props.lon})" style="margin-top:8px;width:100%" class="btn-ghost">Full Site Analysis</button>`;
+}
+
+async function drillCell(lat,lon){
+  curLat=lat;curLon=lon;
+  document.getElementById('loc-input').value=`${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+  setMode('site');await doLoad();
+}
+
+
+// ── Mode toggle ───────────────────────────────────────────────────────────────
+function setMode(m){
+  mode=m;
+  document.getElementById('site-panels').style.display=m==='site'?'':'none';
+  document.getElementById('map-panels').style.display=m==='map'?'':'none';
+  document.getElementById('site-btns').style.display=m==='site'?'flex':'none';
+  document.getElementById('btn-site').className=m==='site'?'btn-ham':'btn-ghost';
+  document.getElementById('btn-map').className=m==='map'?'btn-ham':'btn-ghost';
+  if(m==='map'){lmap.setView([39,-96],4);if(!gridData.length&&!mapLoadRunning)startMapLoad();else renderHour(mapHour);}
+  else{clearMapLayers();if(siteMarker)siteMarker.addTo(lmap);}
+}
+document.getElementById('btn-site').addEventListener('click',()=>setMode('site'));
+document.getElementById('btn-map').addEventListener('click',()=>setMode('map'));
+
+
+// ── Hour buttons ──────────────────────────────────────────────────────────────
+document.getElementById('hour-btns').addEventListener('click',e=>{
+  const b=e.target.closest('.hbtn');if(!b)return;
+  document.querySelectorAll('.hbtn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');mapHour=+b.dataset.h;renderHour(mapHour);
+});
+
+document.getElementById('btn-reload-map').addEventListener('click',()=>{
+  sessionStorage.removeItem(cacheKey(selectedDate));gridData=[];startMapLoad();
+});
+
+
+// ── CONUS map load ─────────────────────────────────────────────────────────────
+function startMapLoad(){
+  mapLoadRunning=true;gridData=[];clearMapLayers();setProgress(0);
+  const dateLabel=selectedDate?` for ${selectedDate}`:'';
+  document.getElementById('map-status').textContent=`Fetching NOAA ${isHistorical(selectedDate)?'ERA5 archive':'GFS'} grid${dateLabel}...`;
+
+  loadCONUSMap(selectedDate,(pt,done,total,fromCache)=>{
+    if(pt){
+      gridData.push(pt);
+      const h=pt.hours[String(mapHour)];
+      if(h?.score>0){
+        if(!heatLayer)heatLayer=L.heatLayer([[pt.lat,pt.lon,h.score/100]],{radius:55,blur:45,maxZoom:6,max:1.0,gradient:{0.0:'transparent',0.15:'#00aa44bb',0.45:'#ffcc00bb',0.7:'#ff6600cc',1.0:'#cc0000ee'}}).addTo(lmap);
+        else heatLayer.addLatLng([pt.lat,pt.lon,h.score/100]);
+      }
+    }
+    setProgress(done/total);
+    document.getElementById('map-status').textContent=`${fromCache?'Cached: ':''}${done}/${total} grid points`;
+  }).then(results=>{
+    mapLoadRunning=false;setProgress(-1);
+    document.getElementById('map-status').textContent=`${results.length} points loaded. Click a cell for details.`;
+    setStatus(`CONUS map ready — ${results.length} grid points${selectedDate?' ('+selectedDate+')':''}.`);
+    renderHour(mapHour);
+  }).catch(err=>{mapLoadRunning=false;setProgress(-1);showErr('Map load failed: '+err.message);});
+}
+
+
+// ── Site analysis ──────────────────────────────────────────────────────────────
+function updateRiskCard(risk){
+  document.getElementById('risk-card').className=`risk-card risk-${risk.level}`;
+  const sc=document.getElementById('rscore');sc.className=`rscore sc-${risk.level}`;sc.textContent=risk.score;
+  document.getElementById('rlevel').textContent=RISK_LABELS[risk.level]||risk.level;
+  document.getElementById('rdesc').textContent=risk.description;
+}
+function updateBadges(ducts){
+  document.getElementById('duct-badges').innerHTML=(ducts||[]).map(d=>
+    `<span class="duct-badge"><span class="dot dot-${d.duct_type}"></span>${d.duct_type} ${d.base_m.toFixed(0)}-${d.top_m.toFixed(0)}m dM=${d.delta_M}${d.traps_n41?' ⚡n41':''}</span>`
+  ).join('');
+}
+function updateMProfile(profile){
+  if(!chartM)initChartM();
+  const pts=profile.filter(l=>l.height_m<=5000);
+  chartM.data.datasets=[{data:pts.map(l=>({x:l.M,y:l.height_m})),borderColor:'#58a6ff',backgroundColor:'transparent',
+    pointBackgroundColor:pts.map(l=>l.gradient_class==='ducting'?'#f85149':l.gradient_class==='super-refractive'?'#f0883e':l.gradient_class==='sub-refractive'?'#8b949e':'#58a6ff'),
+    pointRadius:3,tension:.2,fill:false}];
+  chartM.options.scales.y.max=5000;chartM.update();
+}
+function updateTimeline(analyses){
+  if(!chartTL)initChartTL();
+  document.getElementById('tl-hint').style.display='none';
+  const makeLabel=a=>{
+    if(a.valid_time){try{const d=new Date(a.valid_time);return`${(d.getMonth()+1)}/${d.getDate()} ${String(d.getUTCHours()).padStart(2,'0')}Z`;}catch{}}
+    return isHistorical(selectedDate)?`${a.fcst_hours}Z`:`+${a.fcst_hours}h`;
+  };
+  chartTL.data.labels=analyses.map(makeLabel);
+  chartTL.data.datasets[0].data=analyses.map(a=>a.risk.score);
+  chartTL.data.datasets[0].backgroundColor=analyses.map(a=>RISK_COLORS[a.risk.level]||'#30363d');
+  chartTL.update();
+}
+function updateDuctTable(ducts){
+  const el=document.getElementById('duct-tbl');
+  if(!ducts?.length){el.innerHTML='<p style="color:var(--muted);font-size:11px">None detected.</p>';return;}
+  el.innerHTML=`<table><thead><tr><th>Type</th><th>Layer</th><th>Thick.</th><th>dM</th><th>Class</th><th>n41</th><th>Hop</th></tr></thead><tbody>
+    ${ducts.map(d=>`<tr><td>${d.duct_type}</td><td>${d.base_m.toFixed(0)}-${d.top_m.toFixed(0)}m</td><td>${d.thickness_m}m</td><td>${d.delta_M}</td>
+    <td><span class="tag tag-${d.gradient_class==='ducting'?'d':'s'}">${d.gradient_class}</span></td>
+    <td>${d.traps_n41?'<span class="tag tag-d">YES</span>':'No'}</td><td>${d.max_hop_km>0?d.max_hop_km+'km':'—'}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+function updateSummary(data){
+  const gs=data.gradient_summary||{};
+  document.getElementById('snd-summary').innerHTML=`<table><tbody>
+    <tr><td style="color:var(--muted)">Source</td><td>${data.source||'GFS'}</td></tr>
+    <tr><td style="color:var(--muted)">Valid</td><td style="font-size:10px">${data.valid_time||'—'}</td></tr>
+    <tr><td style="color:var(--muted)">Surface N</td><td>${data.surface_N??'—'} N-units</td></tr>
+    <tr><td style="color:var(--muted)">Normal layers</td><td>${gs.normal||0}</td></tr>
+    <tr><td style="color:var(--muted)">Super-refractive</td><td>${gs['super-refractive']||0}</td></tr>
+    <tr><td style="color:var(--muted)">Ducting layers</td><td style="color:${gs.ducting?'var(--red)':'inherit'}">${gs.ducting||0}</td></tr>
+  </tbody></table>`;
+}
+function updateSiteMarker(lat,lon,hopKm){
+  if(siteMarker)lmap.removeLayer(siteMarker);
+  if(ductCircle){lmap.removeLayer(ductCircle);ductCircle=null;}
+  siteMarker=L.circleMarker([lat,lon],{radius:8,color:'#58a6ff',fillColor:'#58a6ff',fillOpacity:.9,weight:2})
+    .addTo(lmap).bindPopup(`<b>KD9WXY</b><br>${lat.toFixed(3)}, ${lon.toFixed(3)}`);
+  if(hopKm>0)ductCircle=L.circle([lat,lon],{radius:hopKm*1000,color:'#f85149',fillColor:'#f85149',fillOpacity:.04,weight:2,dashArray:'6 4'})
+    .addTo(lmap).bindPopup(`Max hop: ${hopKm} km`);
+}
+
+
+// ── Fetch handlers ─────────────────────────────────────────────────────────────
+function setBusy(v){
+  ['btn-load','btn-now','btn-search'].forEach(id=>document.getElementById(id).disabled=v);
+  document.getElementById('btn-load').textContent=v?'Loading…':(isHistorical(selectedDate)?'Load Day':'Forecast');
+}
+
+async function doNow(){
+  clearErr();setBusy(true);
+  const histHour=+document.getElementById('hist-hour').value;
+  const hour=isHistorical(selectedDate)?histHour:0;
+  try{
+    const soundings=await fetchSoundings(curLat,curLon,selectedDate);
+    const target=soundings.find(s=>s.fcst_hours===hour)||soundings[0];
+    if(!target)throw new Error('No sounding data returned.');
+    const data=analyseSounding(target);
+    updateRiskCard(data.risk);updateBadges(data.ducts);updateMProfile(data.profile);
+    updateDuctTable(data.ducts);updateSummary(data);
+    updateSiteMarker(curLat,curLon,data.risk.best_duct?.max_hop_km||0);
+    lmap.setView([curLat,curLon],9);
+    setStatus(`Analysis: ${data.valid_time||new Date().toLocaleTimeString()}`);
+  }catch(e){showErr(e.message);}finally{setBusy(false);}
+}
+
+async function doLoad(){
+  clearErr();setBusy(true);
+  document.getElementById('tl-hint').textContent='Fetching data…';
+  document.getElementById('tl-hint').style.display='block';
+  try{
+    const soundings=await fetchSoundings(curLat,curLon,selectedDate);
+    if(!soundings.length)throw new Error('No sounding data returned.');
+    const analyses=soundings.map(analyseSounding);
+    const cur=analyses[0];
+    updateRiskCard(cur.risk);updateBadges(cur.ducts);updateMProfile(cur.profile);
+    updateDuctTable(cur.ducts);updateSummary(cur);
+    updateSiteMarker(curLat,curLon,cur.risk.best_duct?.max_hop_km||0);
+    lmap.setView([curLat,curLon],9);
+    updateTimeline(analyses);
+    const peak=analyses.reduce((a,b)=>a.risk.score>b.risk.score?a:b);
+    const label=isHistorical(selectedDate)?`ERA5 ${selectedDate}`:'GFS 7-day';
+    setStatus(`${label} — peak: ${peak.risk.level} at ${peak.valid_time||'+'+peak.fcst_hours+'h'}`);
+  }catch(e){showErr(e.message);}finally{setBusy(false);}
+}
+
+async function doSearch(){
+  const q=document.getElementById('loc-input').value.trim();if(!q)return;
+  clearErr();setBusy(true);
+  try{
+    const geo=await geocode(q);
+    curLat=geo.lat;curLon=geo.lon;
+    document.getElementById('loc-input').value=geo.label||q;
+    setStatus(`Location: ${geo.label||q}`);
+    closeAC();
+    await doLoad();
+  }catch(e){showErr(e.message);}finally{setBusy(false);}
+}
+
+document.getElementById('btn-load').addEventListener('click',doLoad);
+document.getElementById('btn-now').addEventListener('click',doNow);
+document.getElementById('btn-search').addEventListener('click',doSearch);
+document.getElementById('loc-input').addEventListener('keydown',e=>{
+  const items=[...document.querySelectorAll('.ac-item')];
+  if(e.key==='ArrowDown'){
+    e.preventDefault();
+    acIdx=Math.min(acIdx+1,items.length-1);
+    items.forEach((el,i)=>el.classList.toggle('ac-on',i===acIdx));
+  } else if(e.key==='ArrowUp'){
+    e.preventDefault();
+    acIdx=Math.max(acIdx-1,-1);
+    items.forEach((el,i)=>el.classList.toggle('ac-on',i===acIdx));
+  } else if(e.key==='Enter'){
+    if(acIdx>=0&&items[acIdx]){e.preventDefault();pickAC(items[acIdx]);}
+    else doSearch();
+  } else if(e.key==='Escape'){
+    closeAC();
+  }
+});
+
+
+// ── Charts ─────────────────────────────────────────────────────────────────────
+function initChartM(){
+  chartM=new Chart(document.getElementById('ch-mprofile').getContext('2d'),{type:'line',data:{datasets:[]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`M=${c.parsed.x.toFixed(1)}, h=${c.parsed.y.toFixed(0)}m`}}},scales:{x:{title:{display:true,text:'M (M-units)',color:'#8b949e'},grid:{color:'#21262d'},ticks:{color:'#8b949e'}},y:{title:{display:true,text:'Height (m)',color:'#8b949e'},grid:{color:'#21262d'},ticks:{color:'#8b949e'},min:0,max:5000}}}});
+}
+function initChartTL(){
+  chartTL=new Chart(document.getElementById('ch-timeline').getContext('2d'),{type:'bar',data:{labels:[],datasets:[{label:'Risk',data:[],backgroundColor:[],borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#21262d'},ticks:{color:'#8b949e',font:{size:9},maxRotation:45}},y:{min:0,max:100,grid:{color:'#21262d'},ticks:{color:'#8b949e'},title:{display:true,text:'Risk 0-100',color:'#8b949e',font:{size:10}}}}}});
+}
+
+
+// ── Utilities ──────────────────────────────────────────────────────────────────
+function setProgress(f){const w=document.getElementById('pgbar-wrap'),b=document.getElementById('pgbar');if(f<0){w.style.display='none';return;}w.style.display='block';b.style.width=`${Math.round(f*100)}%`;}
+function setStatus(m){document.getElementById('st-msg').textContent=m;document.getElementById('st-time').textContent=new Date().toLocaleTimeString();}
+function showErr(m){const e=document.getElementById('errmsg');e.style.display='block';e.textContent='Error: '+m;}
+function clearErr(){document.getElementById('errmsg').style.display='none';}
+
+
+// ═══════════════════════════════════════════════════════════
+// AUTOCOMPLETE
+// ═══════════════════════════════════════════════════════════
+let acTimer=null;
+let acIdx=-1;
+
+function renderAC(results){
+  const list=document.getElementById('ac-list');
+  if(!results.length){closeAC();return;}
+  list.innerHTML=results.map((r,i)=>{
+    const primary=[r.name,r.admin1].filter(Boolean).join(', ');
+    const secondary=r.country_code||'';
+    return`<div class="ac-item" data-lat="${r.latitude}" data-lon="${r.longitude}" data-label="${[r.name,r.admin1,r.country_code].filter(Boolean).join(', ')}">
+      <div>${primary}</div>${secondary?`<div class="ac-sub">${secondary}</div>`:''}
+    </div>`;
+  }).join('');
+  list.style.display='block';
+  list.querySelectorAll('.ac-item').forEach(el=>{
+    el.addEventListener('mousedown',ev=>{ev.preventDefault();pickAC(el);});
+  });
+}
+
+function pickAC(el){
+  curLat=parseFloat(el.dataset.lat);
+  curLon=parseFloat(el.dataset.lon);
+  document.getElementById('loc-input').value=el.dataset.label;
+  closeAC();
+  doLoad();
+}
+
+function closeAC(){
+  const list=document.getElementById('ac-list');
+  list.style.display='none';list.innerHTML='';acIdx=-1;
+}
+
+document.getElementById('loc-input').addEventListener('input',()=>{
+  clearTimeout(acTimer);acIdx=-1;
+  const q=document.getElementById('loc-input').value.trim();
+  if(q.length<2||/^-?\d+\.?\d*\s*,/.test(q)){closeAC();return;}
+  acTimer=setTimeout(async()=>{
+    const results=await fetchSuggestions(q);
+    // Only show if input hasn't changed since fetch started
+    if(document.getElementById('loc-input').value.trim()===q)renderAC(results);
+  },280);
+});
+
+document.getElementById('loc-input').addEventListener('blur',()=>{
+  // Delay so mousedown on ac-item fires first
+  setTimeout(closeAC,160);
+});
+
+document.addEventListener('click',e=>{
+  if(!e.target.closest('#ac-wrap'))closeAC();
+});
+
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+initChartM();
+initChartTL();
+initDatePicker();
+rebuildMapHourBtns();
+
+// Auto-load from overview map click (?lat=X&lon=Y)
+(()=>{
+  const p=new URLSearchParams(window.location.search);
+  const la=parseFloat(p.get('lat')),lo=parseFloat(p.get('lon'));
+  if(!isNaN(la)&&!isNaN(lo)){
+    curLat=la;curLon=lo;
+    document.getElementById('loc-input').value=`${la.toFixed(4)},${lo.toFixed(4)}`;
+  }
+})();
+
+doSearch();
+</script>
+</body>
+</html>
