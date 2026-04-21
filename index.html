@@ -315,7 +315,7 @@ function detectDucts(profile){
     else if(inDuct){
       Mm=Math.min(Mm,profile[i].M);
       if(profile[i].M>=Mb||(dM>5&&profile[i].M>Mm+2)){
-        const dv=Mb-Mm;if(dv>=1)ducts.push(_bduct(profile,bi,i,Mb,dv));inDuct=false;
+        const dv=Mb-Mm;if(dv>=0.5)ducts.push(_bduct(profile,bi,i,Mb,dv));inDuct=false;
       }
     }
   }
@@ -336,12 +336,38 @@ function _bduct(profile,bi,ti,Mb,dM){
          duct_type:bh<200?'surface':'elevated',gradient_class:gradClass(mg),traps_n41:tn41,critical_f_MHz:Math.round(fc),max_hop_km:hop};
 }
 
-function interferenceRisk(ducts){
-  if(!ducts.length)return{score:0,level:'none',description:'No ducting detected. Standard propagation.',n41_ducts:0,best_duct:null};
+function interferenceRisk(ducts,profile){
+  // Super-refractive proxy: GFS pressure-level resolution (~200-300m layers) cannot
+  // resolve thin boundary-layer ducts (<150m). A strong super-refractive gradient
+  // (dN/dh < -40) is often a smoothed-out duct. Score it proportionally.
+  const srProxy=profile?((()=>{
+    const srLayers=profile.filter(l=>l.dN_dh!==undefined&&l.dN_dh<=STD_GRAD);
+    if(!srLayers.length)return 0;
+    const strongest=Math.min(...srLayers.map(l=>l.dN_dh));
+    // Scale: -40 N/km → 0 pts, -157 N/km → 20 pts, below -157 → up to 30 pts
+    if(strongest>STD_GRAD)return 0;
+    if(strongest>DUCT_THRESH)return Math.round((-strongest-40)/(157-40)*20);
+    return Math.min(30,Math.round(20+(-strongest-157)/50*10));
+  })())
+  :0;
+
+  if(!ducts.length){
+    if(srProxy>0){
+      const lvl=srProxy>=20?'moderate':srProxy>=10?'low':'low';
+      return{score:srProxy,level:lvl,
+             description:`Super-refractive gradient present. GFS resolution may be masking a shallow surface duct. Elevated n41 propagation possible.`,
+             n41_ducts:0,best_duct:null};
+    }
+    return{score:0,level:'none',description:'No ducting detected. Standard propagation.',n41_ducts:0,best_duct:null};
+  }
   const n41=ducts.filter(d=>d.traps_n41);
-  if(!n41.length)return{score:5,level:'low',description:`${ducts.length} duct(s) present but too thin/weak for 2.5 GHz.`,n41_ducts:0,best_duct:null};
+  if(!n41.length){
+    const s=Math.max(5,srProxy);
+    return{score:s,level:'low',description:`${ducts.length} duct(s) present but below n41 trapping threshold. Super-refractive enhancement likely.`,n41_ducts:0,best_duct:null};
+  }
   const best=n41.reduce((a,b)=>a.delta_M>b.delta_M?a:b);
-  const score=Math.min(40,Math.round(best.delta_M*4))+Math.min(30,Math.round(best.max_hop_km/15))+(best.duct_type==='surface'?20:10);
+  const rawScore=Math.min(40,Math.round(best.delta_M*4))+Math.min(30,Math.round(best.max_hop_km/15))+(best.duct_type==='surface'?20:10);
+  const score=Math.min(100,rawScore+Math.round(srProxy*0.3));
   const level=score>=80?'severe':score>=55?'high':score>=30?'moderate':'low';
   const desc=`${best.duct_type[0].toUpperCase()+best.duct_type.slice(1)} duct `
             +`${best.base_m.toFixed(0)}-${best.top_m.toFixed(0)} m, `
@@ -375,7 +401,9 @@ const MAP_FC_HOURS   = [0,6,12,18,24,48,72,96,120,144,168];
 const MAP_HIST_HOURS = [0,6,12,18];
 
 function _omVars(){
-  return PLEVELS.flatMap(lv=>[`temperature_${lv}hPa`,`dewpoint_${lv}hPa`,`geopotential_height_${lv}hPa`]).join(',');
+  const plev=PLEVELS.flatMap(lv=>[`temperature_${lv}hPa`,`dewpoint_${lv}hPa`,`geopotential_height_${lv}hPa`]).join(',');
+  // Surface vars give us a true 2m level — critical for detecting shallow boundary-layer ducts
+  return plev+',temperature_2m,dewpoint_2m,surface_pressure';
 }
 
 function todayStr(){return new Date().toISOString().split('T')[0]}
@@ -392,11 +420,13 @@ async function fetchRawOM(lat,lon,date){
   }
   const r=await fetch(url);
   if(!r.ok)throw new Error(`Open-Meteo ${r.status}: ${await r.text().then(t=>t.slice(0,120))}`);
-  return(await r.json()).hourly;
+  const json=await r.json();
+  // Return elevation alongside hourly so callers can build an accurate surface level
+  return{hourly:json.hourly, elevation:json.elevation??0};
 }
 
-function extractLevels(hourly,h){
-  return PLEVELS.map(lv=>{
+function extractLevels(hourly,h,elev_m){
+  const levels=PLEVELS.map(lv=>{
     const T=hourly[`temperature_${lv}hPa`]?.[h];
     const Td=hourly[`dewpoint_${lv}hPa`]?.[h];
     const H=hourly[`geopotential_height_${lv}hPa`]?.[h];
@@ -404,15 +434,30 @@ function extractLevels(hourly,h){
     if(T<-90||T>60)return null;
     return{pressure_hPa:lv,height_m:H,temp_C:T,dewpoint_C:(Td<-90?T-25:Td)};
   }).filter(Boolean);
+
+  // Inject a true 2m surface level — this is the most sensitive layer for
+  // detecting shallow radiation and evaporation ducts in the boundary layer.
+  // Without it, the lowest data point is 1000 hPa (~110m std atm) or higher,
+  // and thin surface ducts are completely invisible.
+  const T2=hourly['temperature_2m']?.[h];
+  const Td2=hourly['dewpoint_2m']?.[h];
+  const Ps=hourly['surface_pressure']?.[h];
+  if(T2!=null&&Td2!=null&&Ps!=null&&T2>-90&&T2<60){
+    const surf={pressure_hPa:Ps,height_m:(elev_m??0)+2,temp_C:T2,dewpoint_C:(Td2<-90?T2-25:Td2)};
+    // Prepend surface level; remove any pressure-level entries below the surface
+    const filtered=levels.filter(l=>l.height_m>surf.height_m+5);
+    return[surf,...filtered];
+  }
+  return levels;
 }
 
 async function fetchSoundings(lat,lon,date){
-  const hourly=await fetchRawOM(lat,lon,date);
+  const{hourly,elevation}=await fetchRawOM(lat,lon,date);
   const hours=isHistorical(date)?HIST_HOURS:FC_HOURS;
   const src=isHistorical(date)?`ERA5 Archive (${date})`:'NOAA GFS via Open-Meteo';
   return hours.map(h=>{
-    const levels=extractLevels(hourly,h);
-    return{fcst_hours:h,valid_time:(hourly.time||[])[h]||null,levels,source:src,lat,lon};
+    const levels=extractLevels(hourly,h,elevation);
+    return{fcst_hours:h,valid_time:(hourly.time||[])[h]||null,levels,source:src,lat,lon,elevation};
   }).filter(s=>s.levels.length>=4);
 }
 
@@ -420,7 +465,7 @@ function analyseSounding(s){
   const profile=computeProfile(s.levels.map(l=>l.pressure_hPa),s.levels.map(l=>l.height_m),
                                 s.levels.map(l=>l.temp_C),s.levels.map(l=>l.dewpoint_C));
   const ducts=detectDucts(profile);
-  const risk=interferenceRisk(ducts);
+  const risk=interferenceRisk(ducts,profile);
   return{...s,profile,ducts:risk.ducts||[],risk,gradient_summary:gradSummary(profile),
          surface_N:profile.length?+profile[0].N.toFixed(1):null};
 }
@@ -455,7 +500,7 @@ const GRID_LATS=Array.from({length:11},(_,i)=>+(25+i*2.5).toFixed(1));
 const GRID_LONS=Array.from({length:21},(_,i)=>+(-125+i*3).toFixed(1));
 const GRID_PTS =GRID_LATS.flatMap(lat=>GRID_LONS.map(lon=>[lat,lon]));
 
-function cacheKey(date){return`kd9wxy_grid_v2_${date||'forecast'}`}
+function cacheKey(date){return`kd9wxy_grid_v3_${date||'forecast'}`}
 const CACHE_TTL=30*60*1000;
 
 function loadCache(date){
@@ -469,15 +514,15 @@ function saveCache(date,data){
 
 async function _analysePoint(lat,lon,date){
   try{
-    const hourly=await fetchRawOM(lat,lon,date);
+    const{hourly,elevation}=await fetchRawOM(lat,lon,date);
     const hours=isHistorical(date)?MAP_HIST_HOURS:MAP_FC_HOURS;
     const hoursData={};
     for(const h of hours){
-      const levels=extractLevels(hourly,h);
+      const levels=extractLevels(hourly,h,elevation);
       if(levels.length<4)continue;
       const profile=computeProfile(levels.map(l=>l.pressure_hPa),levels.map(l=>l.height_m),
                                     levels.map(l=>l.temp_C),levels.map(l=>l.dewpoint_C));
-      const risk=interferenceRisk(detectDucts(profile));
+      const risk=interferenceRisk(detectDucts(profile),profile);
       hoursData[String(h)]={score:risk.score,level:risk.level,description:risk.description,
                              n41_ducts:risk.n41_ducts,best_duct:risk.best_duct};
     }
@@ -994,14 +1039,14 @@ async function runPathAnalysis(){
     const batch=pts.slice(i,i+BATCH);
     const results=await Promise.all(batch.map(async([lat,lon])=>{
       try{
-        const hourly=await fetchRawOM(lat,lon,selectedDate);
+        const{hourly,elevation}=await fetchRawOM(lat,lon,selectedDate);
         const hour=isHistorical(selectedDate)?+document.getElementById('hist-hour').value:0;
-        const levels=extractLevels(hourly,hour);
+        const levels=extractLevels(hourly,hour,elevation);
         if(levels.length<4)return null;
         const profile=computeProfile(levels.map(l=>l.pressure_hPa),levels.map(l=>l.height_m),
                                       levels.map(l=>l.temp_C),levels.map(l=>l.dewpoint_C));
         const ducts=detectDucts(profile);
-        const risk=interferenceRisk(ducts);
+        const risk=interferenceRisk(ducts,profile);
         const k=kFactor(profile);
         const distKm=haversineKm(geoA.lat,geoA.lon,lat,lon);
         return{lat,lon,distKm,risk,profile,ducts:risk.ducts||[],k};
