@@ -91,6 +91,25 @@ tr:last-child td{border-bottom:none}
 .tag{display:inline-block;border-radius:3px;padding:1px 4px;font-size:10px;font-weight:600}
 .tag-d{background:#2d0a0a;color:var(--red)}.tag-s{background:#2d1800;color:var(--orange)}.tag-n{background:#122d1c;color:var(--green)}
 
+/* ── Path inputs ── */
+.path-inputs{display:none;gap:5px;align-items:center;flex:1;min-width:0}
+.path-inputs input[type=text]{background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:5px 9px;font-size:12px;flex:1;min-width:80px}
+.path-inputs input:focus{outline:none;border-color:var(--accent)}
+.path-label{font-size:10px;color:var(--muted);white-space:nowrap}
+.link-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:7px}
+.lbox{background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:6px 9px}
+.lbox .lval{font-size:18px;font-weight:700;margin-bottom:1px}
+.lbox .lkey{font-size:9px;color:var(--muted)}
+.lbox .lsub{font-size:9px;color:var(--muted);margin-top:2px}
+.seg-good{color:var(--green)}.seg-mod{color:var(--yellow)}.seg-bad{color:var(--orange)}.seg-crit{color:var(--red)}
+.path-seg-row{display:flex;align-items:center;gap:7px;padding:3px 0;border-bottom:1px solid #21262d33;font-size:11px}
+.seg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.lb-row{display:flex;justify-content:space-between;font-size:11px;padding:2px 0}
+.lb-divider{border:none;border-top:1px solid var(--border);margin:5px 0}
+.lb-total{font-weight:700;color:var(--accent)}
+.lb-margin-pos{color:var(--green);font-weight:700}
+.lb-margin-neg{color:var(--red);font-weight:700}
+
 /* ── Map panels ── */
 .hour-btns{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px}
 .hbtn{font-size:11px;padding:3px 8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer}
@@ -128,13 +147,21 @@ tr:last-child td{border-bottom:none}
 <header>
   <div class="callsign">KD9WXY<small>Ham · 5G Engineer</small></div>
   <div><div class="htitle">Tropospheric Ducting Forecast</div><div class="hsub">5G n41 (2496-2690 MHz) &nbsp;·&nbsp; NOAA GFS / ERA5 &nbsp;·&nbsp; ITU-R P.453</div></div>
-  <div class="search-row">
+  <div class="search-row" id="site-search-row">
     <input id="loc-input" type="text" placeholder="Green Bay, WI  or  44.52,-88.02" value="Green Bay, WI">
     <button id="btn-search">Search</button>
+  </div>
+  <div class="path-inputs" id="path-search-row">
+    <span class="path-label">From:</span>
+    <input id="path-from" type="text" placeholder="Green Bay, WI">
+    <span class="path-label">To:</span>
+    <input id="path-to" type="text" placeholder="Chicago, IL">
+    <button id="btn-path-run">Analyze</button>
   </div>
   <div class="mode-row">
     <button id="btn-site" class="btn-ham">Site</button>
     <button id="btn-map" class="btn-ghost">Map</button>
+    <button id="btn-path" class="btn-ghost">Path</button>
   </div>
   <div id="site-btns" style="display:flex;gap:4px">
     <button id="btn-load">Load</button>
@@ -212,6 +239,31 @@ tr:last-child td{border-bottom:none}
       <div class="panel scroll-panel" id="cell-detail">
         <h2>Selected Cell</h2>
         <p style="font-size:11px;color:var(--muted)">Click a cell on the map.</p>
+      </div>
+    </div>
+
+    <!-- PATH panels -->
+    <div id="path-panels" style="display:none">
+      <div class="panel">
+        <h2>Path Profile — Ducting Risk</h2>
+        <div class="ch-wrap"><canvas id="ch-path"></canvas></div>
+        <div id="path-status" style="font-size:11px;color:var(--muted);margin-top:5px">Enter From/To and press Analyze.</div>
+      </div>
+      <div class="panel">
+        <h2>Link Budget <span id="lb-freq-label" style="color:var(--muted);font-weight:400;font-size:9px">n41 · 2593 MHz</span></h2>
+        <div id="lb-content">
+          <p style="font-size:11px;color:var(--muted)">Run path analysis first.</p>
+        </div>
+        <div class="link-grid" id="lb-kpi" style="display:none">
+          <div class="lbox"><div class="lval" id="lb-fspl">—</div><div class="lkey">Free-Space Loss (dB)</div></div>
+          <div class="lbox"><div class="lval" id="lb-ducted">—</div><div class="lkey">Ducted Path Loss (dB)</div></div>
+          <div class="lbox"><div class="lval" id="lb-rx">—</div><div class="lkey">Est. Rx Level (dBm)</div></div>
+          <div class="lbox"><div class="lval" id="lb-margin">—</div><div class="lkey">Link Margin (dB)</div></div>
+        </div>
+      </div>
+      <div class="panel scroll-panel">
+        <h2>Segment Detail</h2>
+        <div id="path-seg-list"><p style="font-size:11px;color:var(--muted)">No data.</p></div>
       </div>
     </div>
 
@@ -617,14 +669,20 @@ function setMode(m){
   mode=m;
   document.getElementById('site-panels').style.display=m==='site'?'':'none';
   document.getElementById('map-panels').style.display=m==='map'?'':'none';
+  document.getElementById('path-panels').style.display=m==='path'?'':'none';
   document.getElementById('site-btns').style.display=m==='site'?'flex':'none';
+  document.getElementById('site-search-row').style.display=m==='path'?'none':'flex';
+  document.getElementById('path-search-row').style.display=m==='path'?'flex':'none';
   document.getElementById('btn-site').className=m==='site'?'btn-ham':'btn-ghost';
   document.getElementById('btn-map').className=m==='map'?'btn-ham':'btn-ghost';
+  document.getElementById('btn-path').className=m==='path'?'btn-ham':'btn-ghost';
   if(m==='map'){lmap.setView([39,-96],4);if(!gridData.length&&!mapLoadRunning)startMapLoad();else renderHour(mapHour);}
-  else{clearMapLayers();if(siteMarker)siteMarker.addTo(lmap);}
+  else if(m==='path'){clearMapLayers();lmap.setView([39,-96],4);}
+  else{clearMapLayers();clearPathLayer();if(siteMarker)siteMarker.addTo(lmap);}
 }
 document.getElementById('btn-site').addEventListener('click',()=>setMode('site'));
 document.getElementById('btn-map').addEventListener('click',()=>setMode('map'));
+document.getElementById('btn-path').addEventListener('click',()=>setMode('path'));
 
 
 // ── Hour buttons ──────────────────────────────────────────────────────────────
@@ -729,8 +787,9 @@ function updateSiteMarker(lat,lon,hopKm){
 
 // ── Fetch handlers ─────────────────────────────────────────────────────────────
 function setBusy(v){
-  ['btn-load','btn-now','btn-search'].forEach(id=>document.getElementById(id).disabled=v);
+  ['btn-load','btn-now','btn-search','btn-path-run'].forEach(id=>document.getElementById(id).disabled=v);
   document.getElementById('btn-load').textContent=v?'Loading…':(isHistorical(selectedDate)?'Load Day':'Forecast');
+  document.getElementById('btn-path-run').textContent=v?'Loading…':'Analyze';
 }
 
 async function doNow(){
@@ -800,9 +859,251 @@ function showErr(m){const e=document.getElementById('errmsg');e.style.display='b
 function clearErr(){document.getElementById('errmsg').style.display='none';}
 
 
+// ═══════════════════════════════════════════════════════════
+// PATH ANALYSIS — great-circle sampling + link budget
+// ═══════════════════════════════════════════════════════════
+
+// Link budget defaults (5G n41 macro)
+const LB = {
+  f_MHz:   2593,
+  tx_dBm:  46,    // typical macro EIRP
+  tx_gain: 17,    // dBi panel antenna
+  rx_gain: 0,     // dBi (isotropic reference / handset)
+  noise_figure: 7, // dB
+  bw_MHz:  100,   // n41 channel BW
+};
+
+// Thermal noise floor: -174 + 10*log10(BW_Hz) + NF
+function noiseFloor_dBm(bw_MHz, nf_dB){
+  return -174 + 10*Math.log10(bw_MHz*1e6) + nf_dB;
+}
+function fspl_dB(f_MHz, d_km){
+  return 32.45 + 20*Math.log10(f_MHz) + 20*Math.log10(Math.max(d_km,0.001));
+}
+
+// Great-circle interpolation — returns n+1 [lat,lon] points
+function gcInterp(lat1,lon1,lat2,lon2,n){
+  const R2D=180/Math.PI,D2R=Math.PI/180;
+  const φ1=lat1*D2R,λ1=lon1*D2R,φ2=lat2*D2R,λ2=lon2*D2R;
+  const d=2*Math.asin(Math.sqrt(Math.sin((φ2-φ1)/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin((λ2-λ1)/2)**2));
+  if(d<1e-9)return Array(n+1).fill([lat1,lon1]);
+  const pts=[];
+  for(let i=0;i<=n;i++){
+    const f=i/n;
+    const A=Math.sin((1-f)*d)/Math.sin(d),B=Math.sin(f*d)/Math.sin(d);
+    const x=A*Math.cos(φ1)*Math.cos(λ1)+B*Math.cos(φ2)*Math.cos(λ2);
+    const y=A*Math.cos(φ1)*Math.sin(λ1)+B*Math.cos(φ2)*Math.sin(λ2);
+    const z=A*Math.sin(φ1)+B*Math.sin(φ2);
+    pts.push([Math.atan2(z,Math.sqrt(x*x+y*y))*R2D,Math.atan2(y,x)*R2D]);
+  }
+  return pts;
+}
+
+function haversineKm(lat1,lon1,lat2,lon2){
+  const D2R=Math.PI/180,R=6371;
+  const dφ=(lat2-lat1)*D2R,dλ=(lon2-lon1)*D2R;
+  const a=Math.sin(dφ/2)**2+Math.cos(lat1*D2R)*Math.cos(lat2*D2R)*Math.sin(dλ/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+// Bearing A→B (degrees)
+function bearingDeg(lat1,lon1,lat2,lon2){
+  const D2R=Math.PI/180;
+  const dL=(lon2-lon1)*D2R;
+  const x=Math.cos(lat2*D2R)*Math.sin(dL);
+  const y=Math.cos(lat1*D2R)*Math.sin(lat2*D2R)-Math.sin(lat1*D2R)*Math.cos(lat2*D2R)*Math.cos(dL);
+  return(Math.atan2(x,y)*180/Math.PI+360)%360;
+}
+
+// PATH STATE
+let pathLayer=null;
+let chartPath=null;
+let pathRunning=false;
+let pathFromLat=null,pathFromLon=null,pathToLat=null,pathToLon=null;
+
+function clearPathLayer(){if(pathLayer){lmap.removeLayer(pathLayer);pathLayer=null;}}
+
+function initChartPath(){
+  chartPath=new Chart(document.getElementById('ch-path').getContext('2d'),{
+    type:'bar',
+    data:{labels:[],datasets:[
+      {label:'Risk Score',data:[],backgroundColor:[],borderRadius:2},
+      {label:'k-factor<1 (ducting)',data:[],type:'line',borderColor:'#f85149',backgroundColor:'transparent',borderDash:[3,3],pointRadius:0,yAxisID:'kax'}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        label:c=>c.datasetIndex===0?`Risk: ${c.parsed.y}/100`:`k: ${c.parsed.y?.toFixed(2)}`
+      }}},
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{color:'#8b949e',font:{size:9},maxRotation:45},title:{display:true,text:'Distance from A (km)',color:'#8b949e',font:{size:9}}},
+        y:{min:0,max:100,grid:{color:'#21262d'},ticks:{color:'#8b949e'},title:{display:true,text:'Risk 0-100',color:'#8b949e',font:{size:10}}},
+        kax:{position:'right',min:-2,max:4,grid:{display:false},ticks:{color:'#f85149',font:{size:9}},title:{display:true,text:'k-factor',color:'#f85149',font:{size:9}}}
+      }
+    }
+  });
+}
+
+// k-factor from M-profile gradient: k = 1/(1 + Re * dN/dh * 1e-6)
+function kFactor(profile){
+  const layers=profile.filter(l=>l.dN_dh!==undefined&&l.height_m<2000);
+  if(!layers.length)return 1.333;
+  const minGrad=Math.min(...layers.map(l=>l.dN_dh));
+  return 1/(1+RE_KM*minGrad*1e-6);
+}
+
+// Ducting advantage estimate based on path coverage
+function ductingAdvantage_dB(segments){
+  if(!segments.length)return 0;
+  const wt={none:0,low:3,moderate:10,high:22,severe:35};
+  const weights=segments.map(s=>wt[s.risk.level]||0);
+  const avgWt=weights.reduce((a,b)=>a+b,0)/weights.length;
+  const ductFrac=segments.filter(s=>s.risk.score>0).length/segments.length;
+  return Math.min(42, avgWt * Math.sqrt(ductFrac));
+}
+
+async function runPathAnalysis(){
+  if(pathRunning)return;
+  const fromQ=document.getElementById('path-from').value.trim();
+  const toQ=document.getElementById('path-to').value.trim();
+  if(!fromQ||!toQ){showErr('Enter both From and To locations.');return;}
+
+  pathRunning=true;clearErr();
+  document.getElementById('path-status').textContent='Geocoding locations…';
+  setProgress(0.05);
+
+  let geoA,geoB;
+  try{
+    [geoA,geoB]=await Promise.all([geocode(fromQ),geocode(toQ)]);
+  }catch(e){showErr('Geocode failed: '+e.message);pathRunning=false;setProgress(-1);return;}
+
+  pathFromLat=geoA.lat;pathFromLon=geoA.lon;
+  pathToLat=geoB.lat;  pathToLon=geoB.lon;
+
+  const totalKm=haversineKm(geoA.lat,geoA.lon,geoB.lat,geoB.lon);
+  const brg=bearingDeg(geoA.lat,geoA.lon,geoB.lat,geoB.lon);
+
+  // Choose N segments based on distance (1 per ~80 km, min 6, max 20)
+  const N=Math.min(20,Math.max(6,Math.round(totalKm/80)));
+  const pts=gcInterp(geoA.lat,geoA.lon,geoB.lat,geoB.lon,N);
+
+  document.getElementById('path-status').textContent=`Sampling ${N+1} points over ${Math.round(totalKm)} km…`;
+
+  // Fetch atmospheric data at each point
+  const BATCH=6;const segs=[];let done=0;
+  for(let i=0;i<pts.length;i+=BATCH){
+    const batch=pts.slice(i,i+BATCH);
+    const results=await Promise.all(batch.map(async([lat,lon])=>{
+      try{
+        const hourly=await fetchRawOM(lat,lon,selectedDate);
+        const hour=isHistorical(selectedDate)?+document.getElementById('hist-hour').value:0;
+        const levels=extractLevels(hourly,hour);
+        if(levels.length<4)return null;
+        const profile=computeProfile(levels.map(l=>l.pressure_hPa),levels.map(l=>l.height_m),
+                                      levels.map(l=>l.temp_C),levels.map(l=>l.dewpoint_C));
+        const ducts=detectDucts(profile);
+        const risk=interferenceRisk(ducts);
+        const k=kFactor(profile);
+        const distKm=haversineKm(geoA.lat,geoA.lon,lat,lon);
+        return{lat,lon,distKm,risk,profile,ducts:risk.ducts||[],k};
+      }catch{return null;}
+    }));
+    results.forEach(r=>{done++;if(r)segs.push(r);setProgress(done/pts.length);});
+  }
+
+  pathRunning=false;setProgress(-1);
+
+  if(!segs.length){showErr('No atmospheric data returned for path.');return;}
+  segs.sort((a,b)=>a.distKm-b.distKm);
+
+  // Render map path
+  clearPathLayer();
+  const colors={none:'#30363d',low:'#3fb950',moderate:'#d29922',high:'#f0883e',severe:'#f85149'};
+  const polylines=[];
+  for(let i=0;i<segs.length-1;i++){
+    const color=colors[segs[i].risk.level]||'#30363d';
+    polylines.push(L.polyline([[segs[i].lat,segs[i].lon],[segs[i+1].lat,segs[i+1].lon]],{color,weight:5,opacity:0.85}));
+  }
+  // Endpoint markers
+  const iconA=L.divIcon({html:'<div style="background:#58a6ff;color:#000;border-radius:50%;width:18px;height:18px;text-align:center;font-size:10px;font-weight:700;line-height:18px">A</div>',iconSize:[18,18],iconAnchor:[9,9]});
+  const iconB=L.divIcon({html:'<div style="background:#f97316;color:#000;border-radius:50%;width:18px;height:18px;text-align:center;font-size:10px;font-weight:700;line-height:18px">B</div>',iconSize:[18,18],iconAnchor:[9,9]});
+  pathLayer=L.layerGroup([...polylines,
+    L.marker([geoA.lat,geoA.lon],{icon:iconA}).bindPopup(`<b>A:</b> ${geoA.label}`),
+    L.marker([geoB.lat,geoB.lon],{icon:iconB}).bindPopup(`<b>B:</b> ${geoB.label}`)
+  ]).addTo(lmap);
+  lmap.fitBounds([[Math.min(geoA.lat,geoB.lat)-1,Math.min(geoA.lon,geoB.lon)-1],[Math.max(geoA.lat,geoB.lat)+1,Math.max(geoA.lon,geoB.lon)+1]]);
+
+  // Update chart
+  if(!chartPath)initChartPath();
+  chartPath.data.labels=segs.map(s=>`${Math.round(s.distKm)}km`);
+  chartPath.data.datasets[0].data=segs.map(s=>s.risk.score);
+  chartPath.data.datasets[0].backgroundColor=segs.map(s=>colors[s.risk.level]||'#30363d');
+  chartPath.data.datasets[1].data=segs.map(s=>+s.k.toFixed(2));
+  chartPath.update();
+
+  // Link budget
+  const adv=ductingAdvantage_dB(segs);
+  const lfs=fspl_dB(LB.f_MHz,totalKm);
+  const lducted=lfs-adv;
+  const rx=LB.tx_dBm+LB.tx_gain+LB.rx_gain-lducted;
+  const nf=noiseFloor_dBm(LB.bw_MHz,LB.noise_figure);
+  const margin=rx-nf;
+
+  document.getElementById('lb-kpi').style.display='grid';
+  document.getElementById('lb-fspl').textContent=lfs.toFixed(1);
+  document.getElementById('lb-ducted').textContent=lducted.toFixed(1);
+  document.getElementById('lb-rx').textContent=rx.toFixed(1);
+  const marginEl=document.getElementById('lb-margin');
+  marginEl.textContent=`${margin>0?'+':''}${margin.toFixed(1)}`;
+  marginEl.className='lval '+(margin>10?'lb-margin-pos':margin>0?'seg-mod':'lb-margin-neg');
+
+  document.getElementById('lb-content').innerHTML=`
+    <div class="lb-row"><span style="color:var(--muted)">Path</span><span>${geoA.label} → ${geoB.label}</span></div>
+    <div class="lb-row"><span style="color:var(--muted)">Distance</span><span>${Math.round(totalKm)} km</span></div>
+    <div class="lb-row"><span style="color:var(--muted)">Bearing</span><span>${Math.round(brg)}°</span></div>
+    <div class="lb-row"><span style="color:var(--muted)">Frequency</span><span>${LB.f_MHz} MHz (n41)</span></div>
+    <hr class="lb-divider">
+    <div class="lb-row"><span style="color:var(--muted)">TX Power</span><span>${LB.tx_dBm} dBm</span></div>
+    <div class="lb-row"><span style="color:var(--muted)">TX Gain</span><span>+${LB.tx_gain} dBi</span></div>
+    <div class="lb-row"><span style="color:var(--muted)">RX Gain</span><span>+${LB.rx_gain} dBi</span></div>
+    <div class="lb-row"><span style="color:var(--muted)">Free-space loss</span><span>−${lfs.toFixed(1)} dB</span></div>
+    <div class="lb-row"><span style="color:var(--accent)">Ducting advantage</span><span style="color:var(--accent)">+${adv.toFixed(1)} dB</span></div>
+    <div class="lb-row lb-total"><span>Ducted path loss</span><span>${lducted.toFixed(1)} dB</span></div>
+    <hr class="lb-divider">
+    <div class="lb-row"><span style="color:var(--muted)">Noise floor (${LB.bw_MHz} MHz BW)</span><span>${nf.toFixed(1)} dBm</span></div>
+    <div class="lb-row lb-total"><span>Est. Rx level</span><span>${rx.toFixed(1)} dBm</span></div>`;
+
+  // Segment list
+  const maxScore=Math.max(...segs.map(s=>s.risk.score));
+  document.getElementById('path-seg-list').innerHTML=segs.map(s=>{
+    const col=colors[s.risk.level]||'#30363d';
+    const kc=s.k<0?'seg-crit':s.k<1?'seg-bad':s.k<1.333?'seg-mod':'seg-good';
+    const kLabel=s.k<0?'Ducting':s.k<1?'Super-refrac':s.k<1.333?'Sub-std':'Normal';
+    return`<div class="path-seg-row">
+      <div class="seg-dot" style="background:${col}"></div>
+      <div style="flex:1">
+        <span style="font-weight:600">${Math.round(s.distKm)} km</span>
+        <span style="color:var(--muted);font-size:10px"> · ${s.lat.toFixed(1)}N ${Math.abs(s.lon).toFixed(1)}W</span>
+      </div>
+      <span style="color:${col};font-weight:600">${s.risk.score}/100</span>
+      <span class="${kc}" style="font-size:10px;min-width:70px;text-align:right">k=${s.k.toFixed(2)} ${kLabel}</span>
+    </div>`;
+  }).join('');
+
+  const peakSeg=segs.reduce((a,b)=>a.risk.score>b.risk.score?a:b);
+  document.getElementById('path-status').textContent=
+    `${Math.round(totalKm)} km · ${segs.length} samples · Peak: ${peakSeg.risk.level} at ${Math.round(peakSeg.distKm)} km · Ducting adv: +${adv.toFixed(1)} dB`;
+  setStatus(`Path ${geoA.label} → ${geoB.label} · ${Math.round(totalKm)} km · max ${peakSeg.risk.level}`);
+}
+
+document.getElementById('btn-path-run').addEventListener('click',runPathAnalysis);
+document.getElementById('path-from').addEventListener('keydown',e=>{if(e.key==='Enter')runPathAnalysis();});
+document.getElementById('path-to').addEventListener('keydown',e=>{if(e.key==='Enter')runPathAnalysis();});
+
+
 // ── Boot ───────────────────────────────────────────────────────────────────────
 initChartM();
 initChartTL();
+initChartPath();
 initDatePicker();
 rebuildMapHourBtns();
 doSearch();
